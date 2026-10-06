@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
@@ -12,6 +10,8 @@
 
 # testing
 /coverage
+/test-results
+/playwright-report
 
 # next.js
 /.next/
@@ -19,6 +19,11 @@
 
 # production
 /build
+
+# local data: SQLite database, uploaded documents, screenshots, generated reports
+/data/*
+!/data/.gitkeep
+!/data/README.md
 
 # misc
 .DS_Store
@@ -30,8 +35,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — never commit secrets; .env.example is the documented template
 .env*
+!.env.example
 
 # vercel
 .vercel
