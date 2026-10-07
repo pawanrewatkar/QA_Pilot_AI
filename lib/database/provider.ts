@@ -1,4 +1,12 @@
+import type { RunComparison } from "@/lib/regression/compare";
 import type {
+  HistoryQuery,
+  ReportBundleRecord,
+  ReportKind,
+  RunHistoryRecord,
+  BugDetail,
+  BugQuery,
+  BugStatus,
   BrowserName,
   CrawlConfig,
   CrawlRun,
@@ -52,6 +60,7 @@ export interface DatabaseProvider {
   testCases: TestCaseRepository;
   bugs: BugRepository;
   reports: ReportRepository;
+  history: HistoryRepository;
   activity: ActivityRepository;
   dashboard: DashboardRepository;
 
@@ -180,12 +189,61 @@ export interface TestCaseRepository {
   list(options?: ListOptions): Promise<TestCaseRecord[]>;
 }
 
+export interface BugFacets {
+  pages: { id: string; url: string }[];
+  testTypes: string[];
+  browsers: string[];
+}
+
 export interface BugRepository {
-  list(options?: ListOptions): Promise<BugRecord[]>;
+  list(query?: BugQuery): Promise<BugRecord[]>;
+  count(query?: BugQuery): Promise<number>;
+  facets(projectId?: string): Promise<BugFacets>;
+  getDetail(id: string): Promise<BugDetail | null>;
+  /** Other bugs on the same page with the same test type and element (shown for review, never merged). */
+  related(id: string): Promise<BugRecord[]>;
+  /** User-driven status change, recorded in the bug's history. */
+  updateStatus(id: string, status: BugStatus, note: string | null): Promise<BugRecord | null>;
+  /** Runs the bug engine over a finished run's verified failures (idempotent). */
+  createFromRun(runId: string): Promise<{ failures: number; created: number; updated: number; reopened: number }>;
+}
+
+export interface ReportBundleQuery {
+  projectId?: string;
+  testRunId?: string;
+  status?: ReportBundleRecord["status"];
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ReportFileLocation {
+  storageKey: string;
+  fileName: string;
+  kind: ReportKind;
 }
 
 export interface ReportRepository {
   list(options?: ListOptions): Promise<ReportRecord[]>;
+  listBundles(query?: ReportBundleQuery): Promise<ReportBundleRecord[]>;
+  countBundles(query?: ReportBundleQuery): Promise<number>;
+  getBundle(id: string): Promise<ReportBundleRecord | null>;
+  /** Creates a GENERATING bundle for a finished run and enqueues the worker job in one transaction. */
+  requestBundle(testRunId: string): Promise<ReportBundleRecord>;
+  /** Removes the bundle's records; the caller deletes the stored files. */
+  deleteBundle(id: string): Promise<boolean>;
+  getFile(bundleId: string, kind: string): Promise<ReportFileLocation | null>;
+}
+
+export interface HistoryRepository {
+  listRuns(query?: HistoryQuery): Promise<RunHistoryRecord[]>;
+  countRuns(query?: HistoryQuery): Promise<number>;
+  getRun(id: string): Promise<RunHistoryRecord | null>;
+  /** The most recent finished run of the same project created before this one (completed runs preferred). */
+  previousRunId(runId: string): Promise<string | null>;
+  comparableRuns(runId: string): Promise<{ id: string; name: string | null; status: string; createdAt: string }[]>;
+  /** Null when either run is missing or the runs belong to different projects. */
+  compare(currentId: string, previousId: string): Promise<RunComparison | null>;
 }
 
 export interface ActivityRepository {

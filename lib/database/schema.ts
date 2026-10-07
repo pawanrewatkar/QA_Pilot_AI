@@ -570,6 +570,130 @@ ALTER TABLE network_results ADD COLUMN error_category TEXT;
 CREATE INDEX idx_content_comparisons_kind ON content_comparisons(test_run_id, kind);
 `,
   },
+  {
+    version: 4,
+    name: "bugs_reports_history",
+    sql: `
+-- bugs is rebuilt (SQLite cannot alter CHECK constraints) to add REOPENED, priority and evidence fields.
+-- Existing rows are copied unchanged.
+CREATE TABLE bugs_v4 (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  code TEXT,
+  test_run_id TEXT REFERENCES test_runs(id) ON DELETE SET NULL,
+  test_result_id TEXT REFERENCES test_results(id) ON DELETE SET NULL,
+  test_case_id TEXT REFERENCES test_cases(id) ON DELETE SET NULL,
+  page_id TEXT REFERENCES pages(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  page_name TEXT,
+  page_url TEXT,
+  section TEXT,
+  test_type TEXT,
+  scenario_type TEXT,
+  severity TEXT NOT NULL CHECK (severity IN ('CRITICAL','HIGH','MEDIUM','LOW')),
+  severity_reason TEXT,
+  priority TEXT NOT NULL DEFAULT 'P2' CHECK (priority IN ('P0','P1','P2','P3')),
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','IN_PROGRESS','RESOLVED','CLOSED','REOPENED','WONT_FIX')),
+  steps_to_reproduce TEXT,
+  expected_result TEXT,
+  actual_result TEXT,
+  element TEXT,
+  selector TEXT,
+  technical_details TEXT,
+  screenshot_key TEXT,
+  browser TEXT,
+  viewport TEXT,
+  -- Deterministic identity used for duplicate detection across runs (page + test case identity).
+  fingerprint TEXT,
+  first_seen_run_id TEXT REFERENCES test_runs(id) ON DELETE SET NULL,
+  last_seen_run_id TEXT REFERENCES test_runs(id) ON DELETE SET NULL,
+  last_seen_at TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT ${NOW},
+  updated_at TEXT NOT NULL DEFAULT ${NOW}
+);
+INSERT INTO bugs_v4 (id, project_id, test_run_id, test_result_id, page_id, title, description, severity, status, steps_to_reproduce, expected_result,
+  actual_result, browser, viewport, fingerprint, first_seen_run_id, last_seen_run_id, created_at, updated_at)
+  SELECT id, project_id, test_run_id, test_result_id, page_id, title, description, severity, status, steps_to_reproduce, expected_result,
+    actual_result, browser, viewport, fingerprint, test_run_id, test_run_id, created_at, updated_at FROM bugs;
+-- bug_evidence references bugs; rebuild it alongside so the foreign key points at the new table.
+CREATE TABLE bug_evidence_v4 (
+  id TEXT PRIMARY KEY,
+  bug_id TEXT NOT NULL REFERENCES bugs_v4(id) ON DELETE CASCADE,
+  evidence_type TEXT NOT NULL CHECK (evidence_type IN ('SCREENSHOT','CONSOLE_LOG','NETWORK_LOG','HTML_SNAPSHOT','VIDEO','TRACE','OTHER')),
+  screenshot_id TEXT REFERENCES screenshots(id) ON DELETE SET NULL,
+  storage_key TEXT,
+  content TEXT,
+  label TEXT,
+  screenshot_kind TEXT CHECK (screenshot_kind IS NULL OR screenshot_kind IN ('VIEWPORT','FULL_PAGE','ELEMENT')),
+  test_run_id TEXT REFERENCES test_runs(id) ON DELETE SET NULL,
+  test_result_id TEXT REFERENCES test_results(id) ON DELETE SET NULL,
+  url TEXT,
+  browser TEXT,
+  viewport TEXT,
+  selector TEXT,
+  captured_at TEXT,
+  created_at TEXT NOT NULL DEFAULT ${NOW}
+);
+INSERT INTO bug_evidence_v4 (id, bug_id, evidence_type, screenshot_id, storage_key, content, created_at)
+  SELECT id, bug_id, evidence_type, screenshot_id, storage_key, content, created_at FROM bug_evidence;
+DROP TABLE bug_evidence;
+DROP TABLE bugs;
+ALTER TABLE bugs_v4 RENAME TO bugs;
+ALTER TABLE bug_evidence_v4 RENAME TO bug_evidence;
+CREATE INDEX idx_bugs_project ON bugs(project_id, status);
+CREATE INDEX idx_bugs_severity ON bugs(severity);
+CREATE UNIQUE INDEX idx_bugs_fingerprint ON bugs(project_id, fingerprint) WHERE fingerprint IS NOT NULL;
+CREATE UNIQUE INDEX idx_bugs_code ON bugs(project_id, code) WHERE code IS NOT NULL;
+CREATE INDEX idx_bug_evidence_bug ON bug_evidence(bug_id);
+
+-- Every run in which a bug's failure was observed (one row per browser/viewport result).
+CREATE TABLE bug_occurrences (
+  id TEXT PRIMARY KEY,
+  bug_id TEXT NOT NULL REFERENCES bugs(id) ON DELETE CASCADE,
+  test_run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+  test_result_id TEXT REFERENCES test_results(id) ON DELETE SET NULL,
+  browser TEXT,
+  viewport TEXT,
+  actual_result TEXT,
+  observed_at TEXT NOT NULL,
+  UNIQUE (bug_id, test_result_id)
+);
+CREATE INDEX idx_bug_occurrences_run ON bug_occurrences(test_run_id);
+
+CREATE TABLE bug_status_history (
+  id TEXT PRIMARY KEY,
+  bug_id TEXT NOT NULL REFERENCES bugs(id) ON DELETE CASCADE,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  note TEXT,
+  source TEXT NOT NULL DEFAULT 'USER' CHECK (source IN ('USER','ENGINE')),
+  changed_at TEXT NOT NULL DEFAULT ${NOW}
+);
+CREATE INDEX idx_bug_status_history_bug ON bug_status_history(bug_id, changed_at);
+
+ALTER TABLE screenshots ADD COLUMN kind TEXT NOT NULL DEFAULT 'VIEWPORT' CHECK (kind IN ('VIEWPORT','FULL_PAGE','ELEMENT'));
+ALTER TABLE screenshots ADD COLUMN label TEXT;
+
+-- A report bundle groups the files generated for one run (PDF, HTML, testing Excel, bug Excel).
+CREATE TABLE report_bundles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  test_run_id TEXT REFERENCES test_runs(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  website TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'GENERATING' CHECK (status IN ('GENERATING','READY','FAILED')),
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT ${NOW},
+  completed_at TEXT
+);
+CREATE INDEX idx_report_bundles_project ON report_bundles(project_id, created_at);
+ALTER TABLE reports ADD COLUMN bundle_id TEXT REFERENCES report_bundles(id) ON DELETE CASCADE;
+ALTER TABLE reports ADD COLUMN kind TEXT CHECK (kind IS NULL OR kind IN ('PDF','HTML','TESTING_EXCEL','BUG_EXCEL'));
+CREATE INDEX idx_reports_bundle ON reports(bundle_id);
+`,
+  },
 ];
 
 /** Every table the application expects after all migrations run. */
@@ -602,6 +726,9 @@ export const EXPECTED_TABLES = [
   "crawl_runs",
   "form_submissions",
   "worker_heartbeats",
+  "bug_occurrences",
+  "bug_status_history",
+  "report_bundles",
 ] as const;
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -226,10 +226,15 @@ export class SqliteEngineStore {
     this.db.prepare(`INSERT INTO ${row.table} (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).run(...values);
   }
 
-  saveScreenshot(input: { runId: string; pageId: string; storageKey: string; browser: string; viewport: string; width: number; height: number }) {
+  saveScreenshot(input: { runId: string; pageId: string; storageKey: string; browser: string; viewport: string; width: number; height: number; kind?: "VIEWPORT" | "FULL_PAGE" | "ELEMENT"; label?: string }) {
     this.db
-      .prepare("INSERT INTO screenshots (id, test_run_id, page_id, storage_key, browser, viewport, width, height, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(randomUUID(), input.runId, input.pageId, input.storageKey, input.browser, input.viewport, input.width, input.height, now());
+      .prepare("INSERT INTO screenshots (id, test_run_id, page_id, storage_key, browser, viewport, width, height, captured_at, kind, label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(randomUUID(), input.runId, input.pageId, input.storageKey, input.browser, input.viewport, input.width, input.height, now(), input.kind ?? "VIEWPORT", input.label ?? null);
+  }
+
+  /** The underlying connection, for engine post-processing (bugs, reports) that shares this store's database. */
+  get database(): SqliteDatabase {
+    return this.db;
   }
 
   /** Stores console output and failed requests observed while a page was tested in one browser/viewport. */
@@ -310,8 +315,9 @@ export class SqliteEngineStore {
     const tx = this.db.transaction(() => {
       for (const r of rows) {
         this.db.prepare("UPDATE jobs SET status = 'FAILED', last_error = ?, locked_at = NULL, locked_by = NULL, updated_at = ? WHERE id = ?").run(message, now(), r.id);
-        const payload = JSON.parse(String(r.payload)) as { crawlRunId?: string; testRunId?: string };
+        const payload = JSON.parse(String(r.payload)) as { crawlRunId?: string; testRunId?: string; reportBundleId?: string };
         if (payload.crawlRunId) this.db.prepare("UPDATE crawl_runs SET status = 'FAILED', error_message = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN ('PENDING','RUNNING')").run(message, now(), now(), payload.crawlRunId);
+        if (payload.reportBundleId) this.db.prepare("UPDATE report_bundles SET status = 'FAILED', error_message = ?, completed_at = ? WHERE id = ? AND status = 'GENERATING'").run(message, now(), payload.reportBundleId);
         if (payload.testRunId) this.db.prepare("UPDATE test_runs SET status = 'FAILED', error_message = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN ('PENDING','RUNNING')").run(message, now(), now(), payload.testRunId);
       }
       this.db.prepare("DELETE FROM worker_heartbeats WHERE last_seen_at < ?").run(cutoff);

@@ -1,8 +1,11 @@
-import { ListChecks } from "lucide-react";
+import { Bug, FileChartColumn, GitCompareArrows, ListChecks } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { createBugsFromRunAction } from "@/app/bugs/actions";
+import { generateReportAction } from "@/app/reports/actions";
 import { EmptyState } from "@/components/shared/empty-state";
+import { SubmitButton } from "@/components/shared/submit-button";
 import { PageHeader } from "@/components/shared/page-header";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
 import { moduleLabel, ResultsTable, viewportLabel } from "@/components/test-runs/results-table";
@@ -41,6 +44,13 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
     db.workers.status(),
     db.pages.getByIds(run.projectId, run.pageIds),
   ]);
+  const finished = run.status !== "PENDING" && run.status !== "RUNNING";
+  const [bugCount, bundles, previousRunId] = await Promise.all([
+    db.bugs.count({ testRunId: id }),
+    db.reports.listBundles({ testRunId: id, limit: 1 }),
+    finished ? db.history.previousRunId(id) : Promise.resolve(null),
+  ]);
+  const latestReport = bundles[0];
   const detailView = getDetailView(first(sp.view));
   const detailFilters = {
     pageId: first(sp.page_id) || undefined,
@@ -78,16 +88,63 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
         title={run.name ?? `Test run ${run.id.slice(0, 8)}`}
         description={`${run.pageIds.length} pages × ${run.browsers.length} browsers × ${run.viewports.length} viewports · ${run.modules.length} modules`}
         actions={
-          <Button variant="outline" asChild>
-            <Link href={`/test-cases?run=${run.id}`}>
-              <ListChecks /> Test cases
-            </Link>
-          </Button>
+          <>
+            <Button variant="outline" asChild>
+              <Link href={`/test-cases?run=${run.id}`}>
+                <ListChecks /> Test cases
+              </Link>
+            </Button>
+            <Button variant="outline" asChild>
+              <Link href={`/bugs?run=${run.id}`}>
+                <Bug /> Bugs ({bugCount})
+              </Link>
+            </Button>
+            {finished && previousRunId ? (
+              <Button variant="outline" asChild>
+                <Link href={`/test-runs/${run.id}/compare`}>
+                  <GitCompareArrows /> Compare
+                </Link>
+              </Button>
+            ) : null}
+            {finished ? (
+              <form action={generateReportAction}>
+                <input type="hidden" name="testRunId" value={run.id} />
+                <SubmitButton pendingLabel="Requesting…">
+                  <FileChartColumn /> Generate report
+                </SubmitButton>
+              </form>
+            ) : null}
+          </>
         }
       />
       {run.status === "PENDING" || run.status === "RUNNING" ? <WorkerStatusBanner initial={worker} /> : null}
       {/* Remount when server state changes so the live panel never shows a stale status. */}
       <RunProgress key={`${run.status}-${run.cancelRequested}`} initial={run} />
+
+      {finished ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 text-sm">
+          <span className="text-muted-foreground">
+            {bugCount
+              ? `${bugCount} bug${bugCount === 1 ? "" : "s"} observed in this run (from verified failures only).`
+              : run.counts.FAIL
+                ? "This run has verified failures but no bugs yet (runs from before bug tracking)."
+                : "No verified failures, so no bugs were created."}
+          </span>
+          {run.counts.FAIL ? (
+            <form action={createBugsFromRunAction}>
+              <input type="hidden" name="testRunId" value={run.id} />
+              <SubmitButton variant="outline" size="sm" pendingLabel="Checking…">
+                {bugCount ? "Re-check bugs" : "Create bugs from failures"}
+              </SubmitButton>
+            </form>
+          ) : null}
+          {latestReport ? (
+            <span className="ml-auto text-muted-foreground">
+              Latest report: <Link href="/reports" className="text-foreground hover:underline">{latestReport.status === "GENERATING" ? "generating…" : latestReport.status.toLowerCase()}</Link>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>

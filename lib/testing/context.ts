@@ -30,7 +30,7 @@ export interface PageTestContext {
   /** The project's reference document, extracted once per run (null when none is uploaded or it cannot be read). */
   referenceDocument(): Promise<import("@/lib/content/types").ReferenceLoadResult>;
   /** Screenshot of the page (or one element) stored as evidence. */
-  capture(label: string, target?: Locator): Promise<EvidenceItem | null>;
+  capture(label: string, target?: Locator, options?: { fullPage?: boolean }): Promise<EvidenceItem | null>;
   /** Re-opens the page under test in a clean state. Returns false if it can no longer be loaded. */
   reload(): Promise<boolean>;
   isCancelled(): boolean;

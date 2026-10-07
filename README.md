@@ -2,7 +2,7 @@
 
 Website testing and QA automation platform. QA Pilot AI inspects websites, discovers their pages, runs real browser-based QA checks, captures evidence and records verifiable results.
 
-**Current phase: Phase 3 (advanced QA testing modules).**
+**Current phase: Phase 4 (bugs, reports, history and regression).**
 
 - Phase 1 delivered the application shell, project management, test configuration, the local database, the provider architecture and the worker scaffolding.
 - Phase 2 adds:
@@ -11,7 +11,7 @@ Website testing and QA automation platform. QA Pilot AI inspects websites, disco
   - a Playwright test engine for Chromium, Firefox and WebKit that runs in a separate worker process
   - live test runs with evidence
 - Phase 3 adds UI, Responsive, Typography, Accessibility (axe-core), SEO, Performance (local Lighthouse), Content comparison (PDF/DOCX), Ecommerce and enhanced Console/Network/Forms testing, plus the Figma provider architecture and an expectation hierarchy.
-- Bug creation and Excel/PDF report generation come in later phases.
+- Phase 4 adds an evidence-based bug engine, a bug dashboard, Excel/PDF/standalone-HTML reports with a Report Center, test-run history, regression comparison between runs, and dashboard analytics from real data.
 
 © Pawan Rewatkar. All Rights Reserved. See the in-app **Copyright & IP** page.
 
@@ -173,6 +173,35 @@ Statuses are exactly `PASS`, `FAIL`, `WARNING`, `NOT EXECUTED` and `NOT APPLICAB
 - **WARNING** means a person should review it; **NOT EXECUTED** means the check could not run (with a reason); **NOT APPLICABLE** means the feature does not exist on the page.
 - The database itself rejects PASS, FAIL or WARNING without an execution timestamp.
 
+### Bugs (Phase 4, `lib/bugs`)
+
+- A bug is created **only from a FAIL result** (a verified failure with evidence). WARNING, NOT EXECUTED and NOT APPLICABLE never create bugs. The engine runs automatically at the end of every test run; for older runs use **Create bugs from failures** on the run page (idempotent).
+- Each bug has a project-scoped ID (`BUG-0001`), page, section, test type, scenario type, device, browser, deterministic severity (with the rule's reason) and priority (P0–P3, raised one level on the homepage, cart, checkout and login pages), expected and actual results, steps to reproduce, element, selector, technical details (verifications, console errors, failed requests) and its evidence: viewport, full-page and element screenshots, HTTP/console/network logs, URL, browser, viewport and timestamp.
+- **Duplicates** are detected deterministically: the fingerprint is the normalised page URL plus the test case's stable identity (module, check and element). A recurrence in a later run, browser or viewport adds an occurrence to the same bug. Bugs on the same page with the same test type and element are shown as *related* and are never merged. The `DuplicateDetector` interface is ready for a future AI-assisted detector, which may only suggest.
+- Bugs are **never resolved automatically**. A later run that passes, or in which a failure is not observed, leaves the bug open. When a RESOLVED or CLOSED bug fails again, the engine reopens it and records this in the bug's history.
+
+### Reports (Phase 4, `lib/reports`)
+
+**Generate report** on a finished run queues a `report.generate` job; the worker builds four files under `data/storage/reports/<id>/` and the **Reports** page (Report Center) offers View, Download PDF, Download HTML, Download Testing Excel and Download Bug Excel.
+
+- `QA_Testing_Report_<website>_<date>.xlsx`: Summary, Page Wise Testing, UI Testing, Functional Testing, Positive Negative Edge Testing, Links, Performance, Accessibility, SEO, Console & Network, Content Comparison, Figma Comparison and Typography sheets, with header styling, filters, frozen headers, wrapped text and status colours.
+- `QA_Bug_Report_<website>_<date>.xlsx`: Bug Report, Bug Summary and Testing Type Bug Count sheets.
+- PDF: rendered locally by headless Chromium with a cover page, scope, configuration, summary, statistics, page results, test cases, bugs, UI, typography, performance, accessibility, SEO, content comparison and screenshots.
+- HTML: a single self-contained file that works offline, with charts, a section index, searchable and filterable tables, and embedded screenshots. When opened from the app, it is served with a sandboxing Content-Security-Policy.
+
+Every report carries "QA Pilot AI" and "© Pawan Rewatkar. All Rights Reserved.". Charts and tables are drawn only from recorded results, and empty sections say so. Secrets are removed from report and bug text: credentials in URLs, sensitive query parameters, bearer tokens, JWTs, password and API-key values, and card numbers. Email addresses are masked. Password, payment and one-time-code fields, and fields marked `data-sensitive`, are masked in screenshots at capture time.
+
+### History and regression (Phase 4, `lib/regression`)
+
+The **History** page lists every run with its pages, test totals, status counts, bugs (with new bugs and severity split), average performance score and LCP, and accessibility and SEO failure counts. It also keeps the activity log.
+
+**Compare** (on a run or in History) matches results by stable identity: page, test case key, browser and viewport. Each result is labelled New, Resolved, Still Failing, Changed, Unchanged or Unable to Compare.
+
+- **Resolved** requires the same check to have executed and passed in the newer run.
+- A check that was not executed, or that only changed text or screenshots, is never reported as resolved.
+
+The comparison also lists new bugs, previously existing bugs, and bugs not observed in this run (which stay open). It shows performance changes beyond lab-noise thresholds, and accessibility and UI findings that appeared or disappeared. Findings are compared only where the check ran in both runs.
+
 ## Safety
 
 - **Form submissions are intercepted by default.** Validation tests run in a guarded browser mode that aborts every non-GET request and every page navigation, so nothing reaches the website. The integration tests assert that the fixture server receives zero writes.
@@ -188,6 +217,8 @@ Statuses are exactly `PASS`, `FAIL`, `WARNING`, `NOT EXECUTED` and `NOT APPLICAB
 ## Database
 
 SQLite in `data/qa-pilot.db` (`DATABASE_PATH`). It is created and migrated automatically; `npm run db:migrate` does the same by hand. Migrations never delete data.
+
+Migration 4 (Phase 4) rebuilds `bugs` and `bug_evidence` (copying existing rows) with the bug fields, fingerprint, occurrence tracking and screenshot kinds. It adds `bug_occurrences`, `bug_status_history` and `report_bundles`, adds `kind`/`label` to `screenshots`, and adds `bundle_id`/`kind` to `reports`.
 
 Migration 3 (Phase 3) adds measurement columns to the Phase 1 per-check tables (`ui_results`, `typography_results`, `accessibility_results`, `seo_results`, `content_comparisons`, `console_results`, `network_results`), `test_cases.expectation_source`, and rebuilds `performance_results` (copying existing rows) so local Lighthouse results are labelled distinctly from browser-timing and future PageSpeed results.
 
@@ -235,9 +266,9 @@ tests/               Unit tests, integration tests, fixtures/site-server.ts (loc
 - Vercel limits request bodies to 4.5 MB (relevant for reference-document uploads).
 - **There is no authentication yet.** Add it before exposing the app to anyone else (see the notes in the server action files).
 
-## Limitations (end of Phase 3)
+## Limitations (end of Phase 4)
 
-- Figma comparison and semantic (AI) content comparison are NOT EXECUTED: no Figma provider or AI provider is implemented. Bugs are not yet created from failures, and Excel/PDF reports are not generated.
+- Figma comparison and semantic (AI) content comparison are NOT EXECUTED: no Figma provider or AI provider is implemented.
 - Automated accessibility checks cover only part of WCAG; manual review is still needed.
 - Lighthouse scores are lab measurements on this machine and vary between runs. Lighthouse adds roughly 10 seconds per page and form factor, and always uses Chromium.
 - UI checks for grids, alignment and spacing only consider repeated card-like items, and report WARNING rather than FAIL because layouts can be intentional. Responsive testing resizes the window in the run's first browser, so mobile user agent and touch emulation apply only when the run itself uses a mobile viewport.
@@ -245,4 +276,6 @@ tests/               Unit tests, integration tests, fixtures/site-server.ts (loc
 - There is no UI for storing test credentials, so positive login and logout tests are `NOT EXECUTED`.
 - Interactive checks use heuristics for custom (non-ARIA) components. When the intent of a component cannot be confirmed from its markup, the engine records `WARNING` rather than `FAIL`.
 - Each module tests up to 5 items of a kind per page, 3 forms per page, and a configurable number of links per page (default 100), to keep runs bounded. Real sites with many modules and browsers can take several minutes per page.
+- Reports embed at most 60 screenshots (failures first). The PDF caps test cases at 1,500 rows and detail tables at 400 rows, and says so; the Excel and HTML reports include up to 5,000 rows per detail table.
+- PDF generation needs the Playwright Chromium browser on the worker machine. Without it, the PDF is marked FAILED and the other three files are still produced.
 - Single worker, sequential execution. The crawler always uses Chromium; tests use whichever browsers you select.

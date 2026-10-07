@@ -26,7 +26,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     // Browser extensions (e.g. Katalon Recorder) add attributes to <html> before hydration.
     // This only ignores attribute differences on this element, not its children.
     <html lang="en" suppressHydrationWarning>
-      <body>
+      {/* Browser extensions (e.g. Grammarly) add attributes to <body> before hydration. */}
+      <body suppressHydrationWarning>
         <AppShell>{children}</AppShell>
       </body>
     </html>

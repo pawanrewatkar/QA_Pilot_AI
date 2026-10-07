@@ -45,7 +45,7 @@ const likePattern = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 export const emptyCounts = (): ResultStatusCounts => ({ PASS: 0, FAIL: 0, WARNING: 0, "NOT EXECUTED": 0, "NOT APPLICABLE": 0 });
 
 /** Enqueues a worker job; must run inside the caller's transaction. */
-function enqueueJob(db: SqliteDatabase, type: string, payload: unknown) {
+export function enqueueJob(db: SqliteDatabase, type: string, payload: unknown) {
   const ts = now();
   db.prepare("INSERT INTO jobs (id, type, payload, status, max_attempts, run_after, created_at, updated_at) VALUES (?, ?, ?, 'PENDING', 1, ?, ?, ?)").run(
     randomUUID(),

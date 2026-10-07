@@ -11,6 +11,8 @@ import { evidence, finalizeOutcome, outcome, type CheckOutcome } from "@/lib/tes
 import { planExecution } from "@/lib/testing/registry";
 import { spec } from "@/lib/testing/modules/helpers";
 import { createReferenceLoader } from "./reference-document";
+import { createBugsForRun } from "@/lib/bugs/engine";
+import { sensitiveMask } from "@/lib/playwright/masking";
 import type { BrowserName, EvidenceItem, Viewport } from "@/types";
 
 const MAX_SCREENSHOTS_PER_PAGE_COMBO = 25;
@@ -181,6 +183,14 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
     }
   }
 
+  // Turn verified failures (FAIL with evidence) into bugs, deduplicated against the project's existing bugs.
+  try {
+    const bugSummary = createBugsForRun(store.database, runId);
+    log(`Run ${runId}: ${bugSummary.created} new bug(s), ${bugSummary.updated} existing bug(s) seen again, ${bugSummary.reopened} reopened`);
+  } catch (error) {
+    log(`Bug creation for run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   for (const id of runPageIds.values()) store.finishRunPage(id, cancelled ? "CANCELLED" : "COMPLETED", null);
   const status = cancelled ? "CANCELLED" : "COMPLETED";
   store.finishRun(runId, status, null);
@@ -219,15 +229,23 @@ async function testPage(job: PageJob) {
   }
 
   let screenshots = 0;
-  const capture = async (label: string, target?: Locator): Promise<EvidenceItem | null> => {
-    if (screenshots >= MAX_SCREENSHOTS_PER_PAGE_COMBO || session.page.isClosed()) return null;
+  let current = session;
+  /**
+   * Stores a screenshot as evidence: the viewport (default), one element, or the full page.
+   * Password, payment and other sensitive fields are masked in the image.
+   */
+  const capture = async (label: string, target?: Locator, options: { fullPage?: boolean } = {}): Promise<EvidenceItem | null> => {
+    const p = current.page;
+    if ((screenshots >= MAX_SCREENSHOTS_PER_PAGE_COMBO && !options.fullPage) || p.isClosed()) return null;
+    const kind = target ? "ELEMENT" : options.fullPage ? "FULL_PAGE" : "VIEWPORT";
     try {
-      const buffer = target ? await target.screenshot({ timeout: 5_000 }) : await session.page.screenshot({ timeout: 10_000 });
+      const mask = sensitiveMask(p);
+      const buffer = target ? await target.screenshot({ timeout: 5_000, mask }) : await p.screenshot({ timeout: 15_000, fullPage: !!options.fullPage, mask });
       screenshots++;
-      const key = `runs/${run.id}/${page.id}/${browserName}-${viewport.id}/${String(screenshots).padStart(2, "0")}.png`;
+      const key = `runs/${run.id}/${page.id}/${browserName}-${viewport.id}/${String(screenshots).padStart(2, "0")}-${kind.toLowerCase()}.png`;
       await deps.storage.put(key, new Uint8Array(buffer), { contentType: "image/png" });
-      deps.store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: browserName, viewport: viewport.id, width: viewport.width, height: viewport.height });
-      return { type: "screenshot", label, storageKey: key };
+      deps.store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: browserName, viewport: viewport.id, width: viewport.width, height: viewport.height, kind, label });
+      return { type: "screenshot", label: `${label} (${kind.toLowerCase().replace("_", "-")})`, storageKey: key };
     } catch {
       return null;
     }
@@ -275,7 +293,6 @@ async function testPage(job: PageJob) {
     network: session.network,
   });
 
-  let current = session;
   const ctx: PageTestContext = {
     get session() {
       return current;
@@ -308,16 +325,23 @@ async function testPage(job: PageJob) {
     },
   };
 
+  let failures = 0;
   for (const mod of job.plan.modules) {
     if (job.isCancelled()) break;
     if (mod.scope === "page" && !job.isPrimary) continue;
     ctx.setCurrentTest(`${mod.id} (${browserName} ${viewport.width}×${viewport.height})`);
     const outcomes = await runModule(mod, ctx);
     for (const o of outcomes) {
-      if (job.plan.keep(o.spec.module, o.spec.scenarioType)) job.record(page, browserName, viewport, o);
+      if (!job.plan.keep(o.spec.module, o.spec.scenarioType)) continue;
+      job.record(page, browserName, viewport, o);
+      if (o.status === "FAIL") failures++;
     }
     // Leave the page in a clean state for the next module.
     if (current.page.url() !== nav.finalUrl || current.crashed) await ctx.reload();
+  }
+  // A full-page screenshot accompanies any failures on this page/browser/viewport as bug evidence.
+  if (failures > 0 && !job.isCancelled()) {
+    if (await ctx.reload()) await capture("Full page after testing", undefined, { fullPage: true });
   }
   await current.close();
 }

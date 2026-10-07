@@ -270,6 +270,7 @@ export default async function ProjectDetailPage({ params, searchParams }: PagePr
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-24">Bug ID</TableHead>
                     <TableHead>Title</TableHead>
                     <TableHead>Severity</TableHead>
                     <TableHead>Status</TableHead>
@@ -278,7 +279,8 @@ export default async function ProjectDetailPage({ params, searchParams }: PagePr
                 <TableBody>
                   {bugs.map((b) => (
                     <TableRow key={b.id}>
-                      <TableCell>{b.title}</TableCell>
+                      <TableCell className="font-mono text-xs"><Link href={`/bugs/${b.id}`} className="hover:underline">{b.code ?? b.id.slice(0, 8)}</Link></TableCell>
+                      <TableCell><Link href={`/bugs/${b.id}`} className="hover:underline">{b.title}</Link></TableCell>
                       <TableCell><SeverityBadge severity={b.severity} /></TableCell>
                       <TableCell><BugStatusBadge status={b.status} /></TableCell>
                     </TableRow>

@@ -3,7 +3,6 @@ import type {
   ResultStatusCounts,
   TestRunDetail,
   ActivityRecord,
-  BugRecord,
   DashboardMetrics,
   DocumentKind,
   DocumentRecord,
@@ -15,7 +14,6 @@ import type {
   ProjectQuery,
   ProjectSummary,
   RegressionRecord,
-  ReportRecord,
   ResultTrendPoint,
   TestConfiguration,
   TestConfigurationInput,
@@ -35,6 +33,7 @@ import type {
   PageRepository,
   ProjectRepository,
   ReportRepository,
+  HistoryRepository,
   TestCaseRepository,
   TestConfigurationRepository,
   TestRunRepository,
@@ -51,6 +50,9 @@ import {
   mapRunSummary,
   runDetail,
 } from "./engine-repositories";
+import { LocalBugRepository } from "./bug-repository";
+import { LocalHistoryRepository } from "./history-repository";
+import { LocalReportRepository } from "./report-repository";
 import { getSchemaVersion, openSqlite, runMigrations, type SqliteDatabase } from "./sqlite-client";
 
 type Row = Record<string, unknown>;
@@ -61,7 +63,6 @@ const MAX_LIMIT = 500;
 const now = () => new Date().toISOString();
 const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
-const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
 function clampLimit(limit?: number): number {
   if (!limit || !Number.isFinite(limit) || limit < 1) return DEFAULT_LIMIT;
@@ -374,58 +375,6 @@ class LocalTestRunRepository implements TestRunRepository {
   }
 }
 
-class LocalBugRepository implements BugRepository {
-  constructor(private readonly db: SqliteDatabase) {}
-
-  async list(options: ListOptions = {}): Promise<BugRecord[]> {
-    const { clause, params } = projectScope(options, "b");
-    const rows = this.db
-      .prepare(
-        `SELECT b.*, p.name AS project_name, pg.url AS page_url
-         FROM bugs b JOIN projects p ON p.id = b.project_id LEFT JOIN pages pg ON pg.id = b.page_id
-         ${clause} ORDER BY b.created_at DESC, b.rowid DESC LIMIT ?`,
-      )
-      .all(...params, clampLimit(options.limit)) as Row[];
-    return rows.map((row) => ({
-      id: String(row.id),
-      projectId: String(row.project_id),
-      projectName: String(row.project_name),
-      testRunId: str(row.test_run_id),
-      title: String(row.title),
-      severity: String(row.severity) as BugRecord["severity"],
-      status: String(row.status) as BugRecord["status"],
-      pageUrl: str(row.page_url),
-      createdAt: String(row.created_at),
-    }));
-  }
-}
-
-class LocalReportRepository implements ReportRepository {
-  constructor(private readonly db: SqliteDatabase) {}
-
-  async list(options: ListOptions = {}): Promise<ReportRecord[]> {
-    const { clause, params } = projectScope(options, "rp");
-    const rows = this.db
-      .prepare(
-        `SELECT rp.*, p.name AS project_name FROM reports rp JOIN projects p ON p.id = rp.project_id
-         ${clause} ORDER BY rp.created_at DESC, rp.rowid DESC LIMIT ?`,
-      )
-      .all(...params, clampLimit(options.limit)) as Row[];
-    return rows.map((row) => ({
-      id: String(row.id),
-      projectId: String(row.project_id),
-      projectName: String(row.project_name),
-      testRunId: str(row.test_run_id),
-      format: String(row.format) as ReportRecord["format"],
-      status: String(row.status) as ReportRecord["status"],
-      fileName: str(row.file_name),
-      sizeBytes: numOrNull(row.size_bytes),
-      createdAt: String(row.created_at),
-      completedAt: str(row.completed_at),
-    }));
-  }
-}
-
 class LocalActivityRepository implements ActivityRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
@@ -484,7 +433,9 @@ class LocalDashboardRepository implements DashboardRepository {
           (SELECT COUNT(*) FROM test_results WHERE status = 'PASS') AS passed,
           (SELECT COUNT(*) FROM test_results WHERE status = 'FAIL') AS failed,
           (SELECT COUNT(*) FROM test_results WHERE status = 'WARNING') AS warnings,
+          (SELECT COUNT(*) FROM test_results WHERE status = 'NOT EXECUTED') AS not_executed,
           (SELECT COUNT(*) FROM bugs) AS bugs,
+          (SELECT COUNT(*) FROM bugs WHERE status IN ('OPEN','REOPENED','IN_PROGRESS')) AS open_bugs,
           (SELECT COUNT(*) FROM bugs WHERE severity = 'CRITICAL') AS critical_bugs,
           (SELECT COUNT(*) FROM bugs WHERE severity = 'HIGH') AS high_bugs,
           (SELECT COUNT(*) FROM bugs WHERE severity = 'MEDIUM') AS medium_bugs,
@@ -499,7 +450,9 @@ class LocalDashboardRepository implements DashboardRepository {
       passed: num(row.passed),
       failed: num(row.failed),
       warnings: num(row.warnings),
+      notExecuted: num(row.not_executed),
       bugs: num(row.bugs),
+      openBugs: num(row.open_bugs),
       criticalBugs: num(row.critical_bugs),
       highBugs: num(row.high_bugs),
       mediumBugs: num(row.medium_bugs),
@@ -570,6 +523,7 @@ export class LocalDatabaseProvider implements DatabaseProvider {
   readonly testCases: TestCaseRepository;
   readonly bugs: BugRepository;
   readonly reports: ReportRepository;
+  readonly history: HistoryRepository;
   readonly activity: ActivityRepository;
   readonly dashboard: DashboardRepository;
 
@@ -589,6 +543,7 @@ export class LocalDatabaseProvider implements DatabaseProvider {
     this.testCases = new LocalTestCaseRepository(db);
     this.bugs = new LocalBugRepository(db);
     this.reports = new LocalReportRepository(db);
+    this.history = new LocalHistoryRepository(db);
     this.activity = new LocalActivityRepository(db);
     this.dashboard = new LocalDashboardRepository(db);
   }

@@ -15,12 +15,15 @@ import {
 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { DistributionBars } from "@/components/dashboard/distribution-bars";
 import { ResultTrendChart } from "@/components/dashboard/result-trend-chart";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { RunStatusBadge, SeverityBadge } from "@/components/shared/status-badges";
+import { BugStatusBadge, RunStatusBadge, SeverityBadge } from "@/components/shared/status-badges";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CATEGORY_LABELS, type RegressionCategory, type RunComparison } from "@/lib/regression/compare";
 import { requestDb } from "@/lib/server/db";
 import { cn, formatDateTime, formatNumber } from "@/lib/utils";
 import type { BugSeverity } from "@/types";
@@ -28,6 +31,15 @@ import type { BugSeverity } from "@/types";
 export const metadata: Metadata = { title: "Dashboard" };
 
 const TREND_DAYS = 30;
+const SEVERITY_COLOR: Record<BugSeverity, string> = { CRITICAL: "#991b1b", HIGH: "#d03b3b", MEDIUM: "#fab219", LOW: "#2563eb" };
+const REGRESSION_TONE: Record<string, "destructive" | "warning" | "success" | "default" | "muted"> = {
+  NEW: "destructive",
+  STILL_FAILING: "warning",
+  RESOLVED: "success",
+  CHANGED: "default",
+  UNABLE_TO_COMPARE: "muted",
+};
+const REGRESSION_SHOWN: RegressionCategory[] = ["NEW", "RESOLVED", "STILL_FAILING", "CHANGED", "UNABLE_TO_COMPARE"];
 
 function StatCard({ label, value, icon: Icon, hint, tone }: { label: string; value: number; icon: LucideIcon; hint?: string; tone?: string }) {
   return (
@@ -44,14 +56,21 @@ function StatCard({ label, value, icon: Icon, hint, tone }: { label: string; val
 
 export default async function DashboardPage() {
   const db = await requestDb();
-  const [metrics, recentRuns, recentBugs, activity, trend, regressions] = await Promise.all([
+  const [metrics, recentRuns, recentBugs, activity, trend] = await Promise.all([
     db.dashboard.getMetrics(),
-    db.testRuns.list({ limit: 5 }),
-    db.bugs.list({ limit: 5 }),
+    db.history.listRuns({ limit: 6 }),
+    db.bugs.list({ limit: 6 }),
     db.activity.list({ limit: 8 }),
     db.dashboard.getResultTrend(TREND_DAYS),
-    db.dashboard.getRegressions(10),
   ]);
+  // Regression info: the latest finished run that has an earlier run of the same project.
+  let regression: RunComparison | null = null;
+  for (const run of recentRuns.filter((r) => r.status !== "PENDING" && r.status !== "RUNNING").slice(0, 3)) {
+    const previousId = await db.history.previousRunId(run.id);
+    if (!previousId) continue;
+    regression = await db.history.compare(run.id, previousId);
+    if (regression) break;
+  }
 
   const noResults = metrics.passed + metrics.failed + metrics.warnings === 0;
   const resultHint = noResults ? "No executed results yet" : undefined;
@@ -107,18 +126,46 @@ export default async function DashboardPage() {
           <StatCard label="Passed" value={metrics.passed} icon={CircleCheck} tone="text-success" hint={resultHint} />
           <StatCard label="Failed" value={metrics.failed} icon={CircleX} tone="text-destructive" hint={resultHint} />
           <StatCard label="Warnings" value={metrics.warnings} icon={TriangleAlert} tone="text-warning" hint={resultHint} />
-          <StatCard label="Bugs" value={metrics.bugs} icon={Bug} hint={metrics.bugs === 0 ? "No bugs recorded" : undefined} />
+          <StatCard label="Bugs" value={metrics.bugs} icon={Bug} hint={metrics.bugs === 0 ? "No bugs recorded" : `${formatNumber(metrics.openBugs)} open`} />
         </div>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {severities.map(({ severity, count }) => (
-            <Card key={severity} className="flex items-center justify-between p-4">
-              <div>
-                <p className="text-sm text-muted-foreground">{severity.charAt(0) + severity.slice(1).toLowerCase()} Bugs</p>
-                <p className="mt-1 text-xl font-semibold tabular-nums">{formatNumber(count)}</p>
-              </div>
-              <SeverityBadge severity={severity} />
-            </Card>
-          ))}
+        <div className="grid gap-3 md:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Result status</CardTitle>
+              <CardDescription>All recorded results. NOT EXECUTED means a check could not run; it is never counted as passed.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {noResults && metrics.notExecuted === 0 ? (
+                <EmptyState compact icon={ListChecks} title="No results yet" description="Run tests to see the distribution." />
+              ) : (
+                <DistributionBars
+                  caption="Recorded results by status"
+                  items={[
+                    { label: "PASS", value: metrics.passed, color: "#0ca30c" },
+                    { label: "FAIL", value: metrics.failed, color: "#d03b3b" },
+                    { label: "WARNING", value: metrics.warnings, color: "#fab219" },
+                    { label: "NOT EXECUTED", value: metrics.notExecuted, color: "#9ca3af" },
+                  ]}
+                />
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Bug severity</CardTitle>
+              <CardDescription>All bugs, created only from verified failures.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {metrics.bugs === 0 ? (
+                <EmptyState compact icon={Bug} title="No bugs recorded" description="The severity distribution appears once bugs exist." />
+              ) : (
+                <DistributionBars
+                  caption="Bugs by severity"
+                  items={severities.map(({ severity, count }) => ({ label: severity, value: count, color: SEVERITY_COLOR[severity], href: `/bugs?severity=${severity}` }))}
+                />
+              )}
+            </CardContent>
+          </Card>
         </div>
       </section>
 
@@ -144,20 +191,43 @@ export default async function DashboardPage() {
             <CardTitle className="flex items-center gap-2">
               <GitCompare className="size-4 text-muted-foreground" aria-hidden /> Regressions
             </CardTitle>
-            <CardDescription>Checks that passed in a project&apos;s previous completed run and failed in its latest.</CardDescription>
+            <CardDescription>Latest run compared with the previous run of the same project, matched by stable check identity.</CardDescription>
           </CardHeader>
           <CardContent>
-            {regressions.length === 0 ? (
-              <EmptyState compact icon={GitCompare} title="No regressions detected" description="Requires at least two completed runs of the same project." />
+            {!regression ? (
+              <EmptyState compact icon={GitCompare} title="No comparison yet" description="Requires at least two finished runs of the same project." />
             ) : (
-              <ul className="divide-y text-sm">
-                {regressions.map((r) => (
-                  <li key={`${r.latestRunId}-${r.testCaseId}`} className="py-2">
-                    <p className="font-medium">{r.testCaseTitle}</p>
-                    <p className="text-xs text-muted-foreground">{r.projectName}</p>
+              <div className="space-y-3 text-sm">
+                <p>
+                  <Link href={`/test-runs/${regression.current.id}`} className="font-medium hover:underline">
+                    {regression.current.name ?? `Run ${regression.current.id.slice(0, 8)}`}
+                  </Link>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    vs {regression.previous.name ?? regression.previous.id.slice(0, 8)} · {regression.current.projectName}
+                  </span>
+                </p>
+                <ul className="grid grid-cols-2 gap-2">
+                  {REGRESSION_SHOWN.map((c) => (
+                    <li key={c}>
+                      <Link
+                        href={`/test-runs/${regression.current.id}/compare?with=${regression.previous.id}&category=${c}`}
+                        className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 hover:bg-muted/50"
+                      >
+                        <Badge variant={REGRESSION_TONE[c] ?? "secondary"}>{CATEGORY_LABELS[c]}</Badge>
+                        <span className="font-semibold tabular-nums">{regression.counts[c]}</span>
+                      </Link>
+                    </li>
+                  ))}
+                  <li className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5">
+                    <span className="text-muted-foreground">New bugs</span>
+                    <span className="font-semibold tabular-nums">{regression.bugs.new.length}</span>
                   </li>
-                ))}
-              </ul>
+                </ul>
+                <Link href={`/test-runs/${regression.current.id}/compare?with=${regression.previous.id}`} className="inline-block text-xs font-medium text-primary hover:underline">
+                  Open full comparison
+                </Link>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -167,6 +237,9 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>Recent Test Runs</CardTitle>
+            <CardDescription>
+              <Link href="/history" className="hover:underline">All runs</Link>
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {recentRuns.length === 0 ? (
@@ -176,8 +249,11 @@ export default async function DashboardPage() {
                 {recentRuns.map((run) => (
                   <li key={run.id} className="flex items-center justify-between gap-2 py-2">
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{run.projectName}</p>
-                      <p className="text-xs text-muted-foreground">{formatDateTime(run.createdAt)}</p>
+                      <Link href={`/test-runs/${run.id}`} className="block truncate font-medium hover:underline">{run.name ?? run.projectName}</Link>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDateTime(run.createdAt)} · <span className="text-success">{run.counts.PASS}</span>/<span className="text-destructive">{run.counts.FAIL}</span>/
+                        <span className="text-warning">{run.counts.WARNING}</span> · {run.bugs} bugs
+                      </p>
                     </div>
                     <RunStatusBadge status={run.status} />
                   </li>
@@ -190,6 +266,9 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>Recent Bugs</CardTitle>
+            <CardDescription>
+              <Link href="/bugs" className="hover:underline">All bugs</Link>
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {recentBugs.length === 0 ? (
@@ -199,8 +278,10 @@ export default async function DashboardPage() {
                 {recentBugs.map((bug) => (
                   <li key={bug.id} className="flex items-center justify-between gap-2 py-2">
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{bug.title}</p>
-                      <p className="text-xs text-muted-foreground">{bug.projectName}</p>
+                      <Link href={`/bugs/${bug.id}`} className="block truncate font-medium hover:underline">{bug.title}</Link>
+                      <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                        <span className="font-mono">{bug.code}</span> · {bug.projectName} · <BugStatusBadge status={bug.status} />
+                      </p>
                     </div>
                     <SeverityBadge severity={bug.severity} />
                   </li>
@@ -233,7 +314,7 @@ export default async function DashboardPage() {
               </ul>
             )}
             {activity.length > 0 ? (
-              <Link href="/history" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
+              <Link href="/history?tab=activity" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
                 View full history
               </Link>
             ) : null}

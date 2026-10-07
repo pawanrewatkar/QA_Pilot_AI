@@ -31,6 +31,7 @@ const BUG_STATUS: Record<BugStatus, Variant> = {
   IN_PROGRESS: "default",
   RESOLVED: "success",
   CLOSED: "secondary",
+  REOPENED: "warning",
   WONT_FIX: "muted",
 };
 
