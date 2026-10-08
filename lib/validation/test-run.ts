@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ALL_TEST_MODULE_IDS, VIEWPORT_IDS } from "@/lib/constants/testing";
-import { BROWSERS, CONTENT_COMPARISON_MODES, CONTENT_EXCLUSIONS, DEFAULT_ADVANCED_OPTIONS, TYPOGRAPHY_MODES } from "@/types";
+import { BROWSERS, GENERATED_REPORT_FORMATS, CONTENT_COMPARISON_MODES, CONTENT_EXCLUSIONS, DEFAULT_ADVANCED_OPTIONS, TYPOGRAPHY_MODES } from "@/types";
 
 export const MAX_PAGES_PER_RUN = 200;
 
@@ -30,6 +30,7 @@ export const testRunFormSchema = z.object({
     .default("")
     .transform((v) => v.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 20)),
   performanceFormFactors: z.array(z.enum(["desktop", "mobile"])).default(["desktop"]),
+  reportFormats: z.array(z.enum(GENERATED_REPORT_FORMATS)).default([]),
 });
 
 export type TestRunForm = z.infer<typeof testRunFormSchema>;
@@ -47,6 +48,7 @@ export function parseTestRunForm(raw: unknown): { ok: true; data: TestRunForm } 
         modules: ALL_TEST_MODULE_IDS.filter((id) => d.modules.includes(id)),
         browsers: BROWSERS.filter((b) => d.browsers.includes(b)),
         viewports: VIEWPORT_IDS.filter((v) => d.viewports.includes(v)),
+        reportFormats: GENERATED_REPORT_FORMATS.filter((f) => d.reportFormats.includes(f)),
       },
     };
   }

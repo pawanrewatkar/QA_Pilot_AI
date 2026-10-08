@@ -48,7 +48,7 @@ export function Field({ id, label, hint, error, required, children }: FieldProps
       <Label htmlFor={id}>
         {label}
         {required ? (
-          <span className="text-destructive" aria-hidden>
+          <span className="text-destructive-text" aria-hidden>
             {" "}
             *
           </span>
@@ -58,7 +58,7 @@ export function Field({ id, label, hint, error, required, children }: FieldProps
       </Label>
       {children}
       {error ? (
-        <p id={`${id}-error`} className="whitespace-pre-line text-xs text-destructive" role="alert">
+        <p id={`${id}-error`} className="whitespace-pre-line text-xs text-destructive-text" role="alert">
           {error}
         </p>
       ) : hint ? (

@@ -21,7 +21,7 @@ export function DeleteProjectDialog({ projectId, projectName, compact }: { proje
             <Trash2 />
           </Button>
         ) : (
-          <Button variant="outline" className="text-destructive hover:text-destructive">
+          <Button variant="outline" className="text-destructive-text hover:text-destructive">
             <Trash2 /> Delete
           </Button>
         )}

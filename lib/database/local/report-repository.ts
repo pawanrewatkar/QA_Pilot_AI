@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ListOptions, ReportBundleRecord, ReportFileRecord, ReportRecord } from "@/types";
+import type { ListOptions, ReportBundleRecord, ReportFileRecord, ReportKind, ReportRecord } from "@/types";
 import type { ReportBundleQuery, ReportFileLocation, ReportRepository } from "../provider";
 import { enqueueJob } from "./engine-repositories";
 import type { SqliteDatabase } from "./sqlite-client";
@@ -110,7 +110,7 @@ export class LocalReportRepository implements ReportRepository {
     return row ? this.mapBundles([row])[0] : null;
   }
 
-  async requestBundle(testRunId: string): Promise<ReportBundleRecord> {
+  async requestBundle(testRunId: string, kinds?: ReportKind[]): Promise<ReportBundleRecord> {
     const run = this.db.prepare("SELECT r.id, r.name, r.status, r.project_id, p.name AS project_name, p.website_url FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?").get(testRunId) as Row | undefined;
     if (!run) throw new Error("Test run not found");
     if (run.status === "PENDING" || run.status === "RUNNING") throw new Error("Reports can be generated once the run has finished.");
@@ -120,7 +120,7 @@ export class LocalReportRepository implements ReportRepository {
     this.db.transaction(() => {
       this.db.prepare("INSERT INTO report_bundles (id, project_id, test_run_id, name, website, status, created_at) VALUES (?, ?, ?, ?, ?, 'GENERATING', ?)").run(id, run.project_id, testRunId, name, run.website_url, ts);
       // The payload names only the bundle so that recovery of a stopped worker never touches the run.
-      enqueueJob(this.db, "report.generate", { reportBundleId: id });
+      enqueueJob(this.db, "report.generate", kinds ? { reportBundleId: id, kinds } : { reportBundleId: id });
     })();
     return (await this.getBundle(id))!;
   }

@@ -7,7 +7,7 @@ const alertVariants = cva("relative flex gap-3 rounded-lg border p-4 text-sm [&>
     variant: {
       info: "border-primary/25 bg-primary/5 [&>svg]:text-primary",
       warning: "border-warning/40 bg-warning/8 [&>svg]:text-warning",
-      destructive: "border-destructive/30 bg-destructive/5 text-destructive [&>svg]:text-destructive",
+      destructive: "border-destructive/30 bg-destructive/5 text-destructive-text [&>svg]:text-destructive",
       success: "border-success/30 bg-success/5 [&>svg]:text-success",
     },
   },

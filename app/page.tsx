@@ -123,12 +123,12 @@ export default async function DashboardPage() {
       <section aria-labelledby="results-heading" className="space-y-3">
         <h2 id="results-heading" className="text-sm font-semibold text-muted-foreground">Results &amp; bugs</h2>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <StatCard label="Passed" value={metrics.passed} icon={CircleCheck} tone="text-success" hint={resultHint} />
-          <StatCard label="Failed" value={metrics.failed} icon={CircleX} tone="text-destructive" hint={resultHint} />
-          <StatCard label="Warnings" value={metrics.warnings} icon={TriangleAlert} tone="text-warning" hint={resultHint} />
+          <StatCard label="Passed" value={metrics.passed} icon={CircleCheck} tone="text-success-text" hint={resultHint} />
+          <StatCard label="Failed" value={metrics.failed} icon={CircleX} tone="text-destructive-text" hint={resultHint} />
+          <StatCard label="Warnings" value={metrics.warnings} icon={TriangleAlert} tone="text-warning-text" hint={resultHint} />
           <StatCard label="Bugs" value={metrics.bugs} icon={Bug} hint={metrics.bugs === 0 ? "No bugs recorded" : `${formatNumber(metrics.openBugs)} open`} />
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <Card>
             <CardHeader>
               <CardTitle>Result status</CardTitle>
@@ -169,7 +169,7 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -233,7 +233,7 @@ export default async function DashboardPage() {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>Recent Test Runs</CardTitle>
@@ -251,8 +251,8 @@ export default async function DashboardPage() {
                     <div className="min-w-0">
                       <Link href={`/test-runs/${run.id}`} className="block truncate font-medium hover:underline">{run.name ?? run.projectName}</Link>
                       <p className="text-xs text-muted-foreground">
-                        {formatDateTime(run.createdAt)} · <span className="text-success">{run.counts.PASS}</span>/<span className="text-destructive">{run.counts.FAIL}</span>/
-                        <span className="text-warning">{run.counts.WARNING}</span> · {run.bugs} bugs
+                        {formatDateTime(run.createdAt)} · <span className="text-success-text">{run.counts.PASS}</span>/<span className="text-destructive-text">{run.counts.FAIL}</span>/
+                        <span className="text-warning-text">{run.counts.WARNING}</span> · {run.bugs} bugs
                       </p>
                     </div>
                     <RunStatusBadge status={run.status} />

@@ -7,7 +7,7 @@ let instance: AIProvider | null = null;
 
 /**
  * Returns the active analysis provider. Only the local, deterministic provider exists in
- * this phase; an LLM-backed provider can be added here behind AI_PROVIDER without changing callers.
+ * this version; an LLM-backed provider can be added here behind AI_PROVIDER without changing callers.
  */
 export function getAIProvider(): AIProvider {
   instance ??= new LocalAnalysisProvider();

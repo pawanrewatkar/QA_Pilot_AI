@@ -29,7 +29,7 @@ const ACTION_VARIANT: Record<string, "success" | "default" | "destructive" | "se
 function Ratio({ value, label }: { value: { failed: number; executed: number } | null; label: string }) {
   if (!value) return <span className="text-muted-foreground" title={`${label} was not tested`}>—</span>;
   return (
-    <span className={cn("tabular-nums", value.failed ? "text-destructive" : "")} title={`${value.failed} failed of ${value.executed} executed ${label} checks`}>
+    <span className={cn("tabular-nums", value.failed ? "text-destructive-text" : "")} title={`${value.failed} failed of ${value.executed} executed ${label} checks`}>
       {value.failed}/{value.executed}
     </span>
   );
@@ -52,7 +52,7 @@ function RunRow({ r }: { r: RunHistoryRecord }) {
       <TableCell className="text-right tabular-nums">{r.pages}</TableCell>
       <TableCell className="text-right tabular-nums">{r.totalTests}</TableCell>
       <TableCell className="text-right text-xs tabular-nums whitespace-nowrap">
-        <span className="text-success">{c.PASS}</span> / <span className="text-destructive">{c.FAIL}</span> / <span className="text-warning">{c.WARNING}</span> /{" "}
+        <span className="text-success-text">{c.PASS}</span> / <span className="text-destructive-text">{c.FAIL}</span> / <span className="text-warning-text">{c.WARNING}</span> /{" "}
         <span className="text-muted-foreground">{c["NOT EXECUTED"]}</span>
       </TableCell>
       <TableCell className="hidden text-right text-xs tabular-nums lg:table-cell">

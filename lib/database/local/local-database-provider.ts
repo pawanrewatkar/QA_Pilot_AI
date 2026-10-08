@@ -223,7 +223,30 @@ class LocalProjectRepository implements ProjectRepository {
   }
 
   async delete(id: string): Promise<boolean> {
-    return this.db.prepare("DELETE FROM projects WHERE id = ?").run(id).changes > 0;
+    let deleted = false;
+    const ts = now();
+    this.db.transaction(() => {
+      // Queued work for this project is cancelled and running work is asked to stop, so the worker
+      // never picks up a job whose records are gone. (jobs has no foreign key: payloads are JSON.)
+      this.db.prepare("UPDATE test_runs SET cancel_requested = 1 WHERE project_id = ? AND status IN ('PENDING','RUNNING')").run(id);
+      this.db.prepare("UPDATE crawl_runs SET cancel_requested = 1 WHERE project_id = ? AND status IN ('PENDING','RUNNING')").run(id);
+      this.db
+        .prepare(
+          `UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND (
+             json_extract(payload, '$.testRunId') IN (SELECT id FROM test_runs WHERE project_id = ?)
+             OR json_extract(payload, '$.crawlRunId') IN (SELECT id FROM crawl_runs WHERE project_id = ?)
+             OR json_extract(payload, '$.reportBundleId') IN (SELECT id FROM report_bundles WHERE project_id = ?))`,
+        )
+        .run(ts, id, id, id);
+      deleted = this.db.prepare("DELETE FROM projects WHERE id = ?").run(id).changes > 0;
+    })();
+    return deleted;
+  }
+
+  async storagePrefixes(id: string): Promise<string[]> {
+    const runs = this.db.prepare("SELECT id FROM test_runs WHERE project_id = ?").all(id) as Row[];
+    const bundles = this.db.prepare("SELECT id FROM report_bundles WHERE project_id = ?").all(id) as Row[];
+    return [...runs.map((r) => `runs/${String(r.id)}`), ...bundles.map((b) => `reports/${String(b.id)}`)];
   }
 
   async count(): Promise<number> {

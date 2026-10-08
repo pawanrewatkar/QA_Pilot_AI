@@ -40,7 +40,7 @@ export default async function ConfigurePage({ params, searchParams }: PageProps<
             <form action={deleteConfigurationAction}>
               <input type="hidden" name="projectId" value={id} />
               <input type="hidden" name="configurationId" value={initial.id} />
-              <SubmitButton variant="outline" className="text-destructive hover:text-destructive" pendingLabel="Deleting…">
+              <SubmitButton variant="outline" className="text-destructive-text hover:text-destructive" pendingLabel="Deleting…">
                 <Trash2 /> Delete configuration
               </SubmitButton>
             </form>

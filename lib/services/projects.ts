@@ -134,9 +134,11 @@ export async function updateProject(
 export async function deleteProject(deps: ProjectServiceDeps, id: string): Promise<boolean> {
   const existing = await deps.db.projects.getById(id);
   if (!existing) return false;
+  // Run screenshots and generated reports live outside the project prefix; collect them first.
+  const prefixes = [projectStoragePrefix(id), ...(await deps.db.projects.storagePrefixes(id))];
   const deleted = await deps.db.projects.delete(id);
   if (!deleted) return false;
-  await deps.storage.deletePrefix(projectStoragePrefix(id));
+  for (const prefix of prefixes) await deps.storage.deletePrefix(prefix);
   await deps.db.activity.record({
     projectId: null,
     entityType: "project",

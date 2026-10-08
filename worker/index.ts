@@ -10,6 +10,7 @@
  */
 import { hostname } from "node:os";
 import { readEnv, resolveFromRoot } from "@/lib/config/env";
+import { redactText } from "@/lib/reports/redact";
 import { SqliteEngineStore } from "@/lib/database/local/engine-store";
 import { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { LocalStorageProvider } from "@/lib/storage/local-storage-provider";
@@ -33,7 +34,8 @@ async function main() {
   const workerId = `${hostname()}:${process.pid}`;
   const startedAt = new Date().toISOString();
   const controller = new AbortController();
-  const log = (message: string) => console.log(`[worker ${new Date().toISOString()}] ${message}`);
+  // Log lines can contain page URLs and error text; secrets in them are redacted.
+  const log = (message: string) => console.log(`[worker ${new Date().toISOString()}] ${redactText(message)}`);
   const types = registeredJobTypes();
 
   const beat = () => store.heartbeat(workerId, hostname(), process.pid, types, startedAt);

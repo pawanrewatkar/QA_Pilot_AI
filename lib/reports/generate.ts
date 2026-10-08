@@ -33,7 +33,7 @@ export interface BundleOutcome {
  * Generates the four files of a report bundle. Each file is produced independently: a failure in
  * one (for example no Chromium for the PDF) is recorded on that file and does not hide the others.
  */
-export async function generateReportBundle(db: SqliteDatabase, storage: StorageProvider, bundleId: string, pdf: PdfRenderer): Promise<BundleOutcome> {
+export async function generateReportBundle(db: SqliteDatabase, storage: StorageProvider, bundleId: string, pdf: PdfRenderer, kinds?: ReportKind[]): Promise<BundleOutcome> {
   const bundle = db.prepare("SELECT * FROM report_bundles WHERE id = ?").get(bundleId) as Record<string, unknown> | undefined;
   if (!bundle) throw new Error(`Report bundle ${bundleId} not found`);
   const now = () => new Date().toISOString();
@@ -62,7 +62,7 @@ export async function generateReportBundle(db: SqliteDatabase, storage: StorageP
   ];
 
   const files: BundleOutcome["files"] = [];
-  for (const b of builders) {
+  for (const b of builders.filter((x) => !kinds || kinds.includes(x.kind))) {
     const id = randomUUID();
     const key = `${bundlePrefix(bundleId)}/${b.fileName}`;
     try {

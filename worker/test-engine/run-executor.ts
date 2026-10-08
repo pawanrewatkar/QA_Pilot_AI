@@ -13,7 +13,8 @@ import { spec } from "@/lib/testing/modules/helpers";
 import { createReferenceLoader } from "./reference-document";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import { sensitiveMask } from "@/lib/playwright/masking";
-import type { BrowserName, EvidenceItem, Viewport } from "@/types";
+import { LocalReportRepository } from "@/lib/database/local/report-repository";
+import type { BrowserName, EvidenceItem, ReportKind, Viewport } from "@/types";
 
 const MAX_SCREENSHOTS_PER_PAGE_COMBO = 25;
 const MODULE_TIMEOUT_MS = 5 * 60_000;
@@ -153,7 +154,18 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
           if (isCancelled()) break;
           const isPrimary = bi === 0 && vi === 0;
           store.updateRunProgress(runId, { currentPageUrl: page.url, currentTest: `Loading page (${browserName} ${viewport.width}×${viewport.height})` });
-          await testPage({ run, page, browserName, viewport, context, isPrimary, plan, deps, linkChecker, formLedger, record, recordNotExecuted, isCancelled, shared, referenceDocument });
+          try {
+            await testPage({ run, page, browserName, viewport, context, isPrimary, plan, deps, linkChecker, formLedger, record, recordNotExecuted, isCancelled, shared, referenceDocument });
+          } catch (error) {
+            // An unexpected error on one page must not stop the other pages, browsers or viewports.
+            const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
+            log(`Page ${page.url} (${browserName} ${viewport.id}) stopped: ${reason}`);
+            try {
+              record(page, browserName, viewport, outcome.notExecuted(spec("page-load", "page-error", { title: "Page testing completed", section: "Page", feature: "Page load", element: page.url, steps: [], expected: "All selected modules run on the page" }), `Testing this page stopped with an unexpected error; remaining checks were not executed: ${reason}`));
+            } catch {
+              /* the run may have been deleted; the outer handler reports it */
+            }
+          }
           completed++;
           store.updateRunProgress(runId, { completed });
         }
@@ -195,6 +207,18 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   const status = cancelled ? "CANCELLED" : "COMPLETED";
   store.finishRun(runId, status, null);
   store.recordActivity(run.projectId, "test_run", runId, status === "CANCELLED" ? "cancelled" : "completed", `Test run ${status === "CANCELLED" ? "cancelled" : "completed"}: ${resultCount} results recorded across ${completed} page/browser/viewport units`);
+
+  // Reports selected for the run are queued as a separate job, so a report failure never affects the run.
+  const formats = run.options.reports?.formats ?? [];
+  if (status === "COMPLETED" && formats.length) {
+    try {
+      const kinds = formats.flatMap((f): ReportKind[] => (f === "EXCEL" ? ["TESTING_EXCEL", "BUG_EXCEL"] : [f]));
+      const bundle = await new LocalReportRepository(store.database).requestBundle(runId, kinds);
+      log(`Run ${runId}: report ${bundle.id} queued (${kinds.join(", ")})`);
+    } catch (error) {
+      log(`Could not queue the report for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return { status, results: resultCount, error: null };
 }
 
@@ -229,6 +253,7 @@ async function testPage(job: PageJob) {
   }
 
   let screenshots = 0;
+  const screenshotFailures: string[] = [];
   let current = session;
   /**
    * Stores a screenshot as evidence: the viewport (default), one element, or the full page.
@@ -246,9 +271,23 @@ async function testPage(job: PageJob) {
       await deps.storage.put(key, new Uint8Array(buffer), { contentType: "image/png" });
       deps.store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: browserName, viewport: viewport.id, width: viewport.width, height: viewport.height, kind, label });
       return { type: "screenshot", label: `${label} (${kind.toLowerCase().replace("_", "-")})`, storageKey: key };
-    } catch {
+    } catch (error) {
+      // Recorded below as an evidence-capture result; the check itself continues without the image.
+      screenshotFailures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       return null;
     }
+  };
+  const evidenceSpec = spec("page-load", "evidence-capture", {
+    title: "Screenshot evidence captured",
+    section: "Page",
+    feature: "Evidence",
+    element: page.url,
+    steps: ["Capture screenshots requested by the checks on this page"],
+    expected: "Every requested screenshot is stored",
+  });
+  const reportScreenshotFailures = () => {
+    if (!screenshotFailures.length) return;
+    job.record(page, browserName, viewport, outcome.notExecuted(evidenceSpec, `${screenshotFailures.length} screenshot(s) could not be captured; the affected checks were recorded without an image. ${screenshotFailures.slice(0, 5).join("; ")}`));
   };
 
   const nav = await session.navigate(page.url, timeout);
@@ -268,6 +307,7 @@ async function testPage(job: PageJob) {
       reason = nav.error ? describeBrowserError(nav.error) : "Page did not load.";
     }
     job.recordNotExecuted(page, browserName, viewport, `Page could not be tested: ${reason}`, job.isPrimary);
+    reportScreenshotFailures();
     await session.close();
     return;
   }
@@ -343,6 +383,7 @@ async function testPage(job: PageJob) {
   if (failures > 0 && !job.isCancelled()) {
     if (await ctx.reload()) await capture("Full page after testing", undefined, { fullPage: true });
   }
+  reportScreenshotFailures();
   await current.close();
 }
 

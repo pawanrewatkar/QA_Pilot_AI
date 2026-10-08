@@ -69,11 +69,11 @@ export default async function BugsPage({ searchParams }: PageProps<"/bugs">) {
       />
       {run ? (
         <p className="text-sm text-muted-foreground">
-          Showing bugs observed in run <Link className="text-foreground hover:underline" href={`/test-runs/${run.id}`}>{run.id.slice(0, 8)}</Link> ·{" "}
-          <Link className="hover:underline" href="/bugs">show all</Link>
+          Showing bugs observed in run <Link className="text-foreground underline underline-offset-2" href={`/test-runs/${run.id}`}>{run.id.slice(0, 8)}</Link> ·{" "}
+          <Link className="underline underline-offset-2" href="/bugs">show all</Link>
         </p>
       ) : null}
-      <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+      <form method="get" className="grid grid-cols-1 gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         {runId ? <input type="hidden" name="run" value={runId} /> : null}
         <div className="grid gap-1.5 sm:col-span-2">
           <Label htmlFor="q">Search</Label>

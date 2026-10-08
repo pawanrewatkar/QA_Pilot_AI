@@ -8,7 +8,7 @@ import { getStorage } from "@/lib/storage";
  */
 export async function GET(request: Request, ctx: RouteContext<"/api/reports/[id]/[kind]">) {
   const { id, kind } = await ctx.params;
-  if (!(kind in REPORT_CONTENT_TYPES)) return new Response("Unknown report type", { status: 404 });
+  if (!Object.hasOwn(REPORT_CONTENT_TYPES, kind)) return new Response("Unknown report type", { status: 404 });
   const file = await getDatabase().reports.getFile(id, kind);
   if (!file) return new Response("Report not found", { status: 404 });
   const bytes = await getStorage().get(file.storageKey);

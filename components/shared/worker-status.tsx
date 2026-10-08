@@ -11,7 +11,7 @@ export function WorkerStatusBanner({ initial, compact }: { initial: WorkerStatus
   if (data.online) {
     return compact ? (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <CircleCheck className="size-3.5 text-success" aria-hidden /> Worker online
+        <CircleCheck className="size-3.5 text-success-text" aria-hidden /> Worker online
       </p>
     ) : null;
   }

@@ -32,7 +32,7 @@ function Cell({ column, value }: { column: DetailColumn; value: string | number 
       return (TEST_RESULT_STATUSES as readonly string[]).includes(String(value)) ? <ResultStatusBadge status={value as TestResultStatus} /> : <span>{String(value)}</span>;
     case "score": {
       const pct = Math.round(Number(value) * 100);
-      return <span className={cn("font-medium tabular-nums", pct >= 90 ? "text-success" : pct >= 50 ? "text-warning" : "text-destructive")}>{pct}</span>;
+      return <span className={cn("font-medium tabular-nums", pct >= 90 ? "text-success-text" : pct >= 50 ? "text-warning-text" : "text-destructive-text")}>{pct}</span>;
     }
     case "ms":
       return <span className="tabular-nums">{Math.round(Number(value))} ms</span>;

@@ -324,7 +324,7 @@ export function renderReportHtml(data: ReportData, options: HtmlOptions): string
       { label: "FAIL", cell: (p) => esc(p.counts.FAIL) },
       { label: "WARNING", cell: (p) => esc(p.counts.WARNING) },
       { label: "NOT EXECUTED", cell: (p) => esc(p.counts["NOT EXECUTED"]) },
-      { label: "N/A", cell: (p) => esc(p.counts["NOT APPLICABLE"]) },
+      { label: "NOT APPLICABLE", cell: (p) => esc(p.counts["NOT APPLICABLE"]) },
       { label: "Bugs", cell: (p) => esc(p.bugs) },
     ], { interactive, empty: "No pages were tested in this run." }),
   );

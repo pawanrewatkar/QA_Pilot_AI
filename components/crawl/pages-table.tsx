@@ -85,7 +85,7 @@ export function PagesTable({ projectId, pages, websiteHost }: { projectId: strin
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
               <Input aria-label="Search pages" placeholder="Search URL, name or title" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" type="search" />
@@ -155,7 +155,7 @@ export function PagesTable({ projectId, pages, websiteHost }: { projectId: strin
                           <span className="sr-only">(opens in new tab)</span>
                         </a>
                         {p.description ? <p className="truncate text-xs text-muted-foreground">{p.description}</p> : null}
-                        {p.errorMessage ? <p className="truncate text-xs text-destructive">{p.errorMessage}</p> : null}
+                        {p.errorMessage ? <p className="truncate text-xs text-destructive-text">{p.errorMessage}</p> : null}
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary" title={p.pageTypeConfidence !== null ? `Confidence ${Math.round(p.pageTypeConfidence * 100)}%` : undefined}>

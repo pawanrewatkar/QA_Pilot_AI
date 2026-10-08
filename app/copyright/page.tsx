@@ -52,7 +52,7 @@ export default function CopyrightPage() {
 
           <Section id="materials" title="Original materials">
             <p>Original materials in {APP_NAME} may include:</p>
-            <ul className="grid list-disc gap-x-8 gap-y-1 pl-5 sm:grid-cols-2">
+            <ul className="grid grid-cols-1 list-disc gap-x-8 gap-y-1 pl-5 sm:grid-cols-2">
               {PROTECTED_MATERIALS.map((m) => (
                 <li key={m}>{m}</li>
               ))}

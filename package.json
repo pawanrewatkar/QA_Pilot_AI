@@ -15,7 +15,8 @@
     "dev:all": "node scripts/dev-all.mjs",
     "test:unit": "vitest run --exclude \"tests/integration/**\"",
     "test:integration": "vitest run tests/integration",
-    "browsers:install": "playwright install chromium firefox webkit"
+    "browsers:install": "playwright install chromium firefox webkit",
+    "test:e2e": "vitest run --config vitest.e2e.config.mts"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.13.0",

@@ -69,13 +69,13 @@ export function ResultsTable({ results }: { results: TestResultRecord[] }) {
                   ]
                     .filter(([, v]) => v)
                     .map(([k, v]) => (
-                      <div key={k} className="grid gap-0.5 sm:grid-cols-[110px_1fr]">
+                      <div key={k} className="grid grid-cols-1 gap-0.5 sm:grid-cols-[110px_1fr]">
                         <dt className="text-muted-foreground">{k}</dt>
                         <dd className="break-words">{v}</dd>
                       </div>
                     ))}
                   {r.steps.length ? (
-                    <div className="grid gap-0.5 sm:grid-cols-[110px_1fr]">
+                    <div className="grid grid-cols-1 gap-0.5 sm:grid-cols-[110px_1fr]">
                       <dt className="text-muted-foreground">Steps</dt>
                       <dd>
                         <ol className="list-decimal pl-4">
@@ -87,7 +87,7 @@ export function ResultsTable({ results }: { results: TestResultRecord[] }) {
                     </div>
                   ) : null}
                   {r.verifications.length ? (
-                    <div className="grid gap-0.5 sm:grid-cols-[110px_1fr]">
+                    <div className="grid grid-cols-1 gap-0.5 sm:grid-cols-[110px_1fr]">
                       <dt className="text-muted-foreground">Verified</dt>
                       <dd>
                         <ul className="list-disc pl-4">
@@ -99,7 +99,7 @@ export function ResultsTable({ results }: { results: TestResultRecord[] }) {
                     </div>
                   ) : null}
                   {r.evidence.length ? (
-                    <div className="grid gap-1 sm:grid-cols-[110px_1fr]">
+                    <div className="grid grid-cols-1 gap-1 sm:grid-cols-[110px_1fr]">
                       <dt className="text-muted-foreground">Evidence</dt>
                       <dd className="grid gap-2">
                         {r.evidence.map((ev, i) =>
@@ -117,7 +117,7 @@ export function ResultsTable({ results }: { results: TestResultRecord[] }) {
                       </dd>
                     </div>
                   ) : null}
-                  {r.message ? <p className="text-warning">{r.message}</p> : null}
+                  {r.message ? <p className="text-warning-text">{r.message}</p> : null}
                 </dl>
               </details>
             </TableCell>

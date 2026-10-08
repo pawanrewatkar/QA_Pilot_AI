@@ -242,7 +242,7 @@ export default async function CompareRunsPage({ params, searchParams }: PageProp
         </div>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <BugList title="New bugs" description="First seen in this run." bugs={cmp.bugs.new} empty="No new bugs." />
         <BugList title="Previously existing bugs" description="Seen in this run and already known before it." bugs={cmp.bugs.existing} empty="No recurring bugs." />
         <BugList
@@ -286,7 +286,7 @@ export default async function CompareRunsPage({ params, searchParams }: PageProp
                   </TableCell>
                   <TableCell><Badge variant={DIRECTION_VARIANT[p.overall]}>{DIRECTION_LABEL[p.overall]}</Badge></TableCell>
                   <TableCell>
-                    <ul className="grid gap-1 text-xs sm:grid-cols-2">
+                    <ul className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
                       {p.changes.map((m) => (
                         <li key={m.metric} className="flex flex-wrap items-center gap-1.5">
                           <span className="text-muted-foreground">{m.metric}:</span>

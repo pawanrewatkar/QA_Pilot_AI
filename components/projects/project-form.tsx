@@ -75,7 +75,7 @@ export function ProjectForm({ action, initialValues = {}, existingDocument, maxU
           <CardDescription>Optional inputs used by Figma, Content, Newsletter and Form testing.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-5">
-          <Field id="figmaUrl" label="Figma URL" error={e.figmaUrl} hint="A figma.com file or design link. Used for Figma comparison in a later phase.">
+          <Field id="figmaUrl" label="Figma URL" error={e.figmaUrl} hint="A figma.com file or design link. Figma comparison needs a Figma provider; until one is configured it is recorded as NOT EXECUTED.">
             <Input id="figmaUrl" name="figmaUrl" type="url" placeholder="https://www.figma.com/design/…" defaultValue={v("figmaUrl")} key={`figma-${v("figmaUrl")}`} aria-invalid={!!e.figmaUrl} aria-describedby={describedBy("figmaUrl", e.figmaUrl, true)} />
           </Field>
           <Field id="testEmail" label="Test email" error={e.testEmail} hint="A mailbox you control, used when testing newsletter and contact forms.">

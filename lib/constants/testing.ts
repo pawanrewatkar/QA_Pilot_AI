@@ -125,20 +125,9 @@ export const VIEWPORTS: Viewport[] = [
 export const VIEWPORT_IDS = VIEWPORTS.map((v) => v.id);
 
 export const REPORT_FORMAT_OPTIONS: { id: ReportFormat; label: string; description: string }[] = [
-  { id: "EXCEL", label: "Excel workbook", description: "Test cases, results and bugs as sheets (.xlsx)." },
-  { id: "PDF", label: "PDF report", description: "Branded, printable summary report." },
-  { id: "HTML", label: "HTML report", description: "Self-contained report viewable in a browser." },
-  { id: "JSON", label: "JSON export", description: "Machine-readable raw results." },
-  { id: "CSV", label: "CSV export", description: "Flat results table for spreadsheets." },
-];
-
-export const REPORT_SECTION_OPTIONS: { id: keyof ReportSections; label: string }[] = [
-  { id: "executiveSummary", label: "Executive summary" },
-  { id: "detailedResults", label: "Detailed test results" },
-  { id: "bugReport", label: "Bug report" },
-  { id: "evidence", label: "Screenshots & evidence" },
-  { id: "performance", label: "Performance metrics" },
-  { id: "accessibility", label: "Accessibility findings" },
+  { id: "EXCEL", label: "Excel workbooks", description: "Testing report and bug report (.xlsx)." },
+  { id: "PDF", label: "PDF report", description: "Branded, printable report rendered locally." },
+  { id: "HTML", label: "HTML report", description: "Single self-contained file that works offline." },
 ];
 
 export const DEFAULT_REPORT_SECTIONS: ReportSections = {

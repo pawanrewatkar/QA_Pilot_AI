@@ -96,7 +96,7 @@ function CrawlProgress({ initial }: { initial: CrawlRun }) {
           </Alert>
         ) : null}
         {crawl.status === "CANCELLED" ? <p className="text-sm text-muted-foreground">The crawl was stopped. Pages found before stopping are kept.</p> : null}
-        {error && !done ? <p className="text-xs text-destructive">Progress update failed: {error}</p> : null}
+        {error && !done ? <p className="text-xs text-destructive-text">Progress update failed: {error}</p> : null}
       </CardContent>
     </Card>
   );
@@ -124,7 +124,7 @@ function CrawlConfigForm({ projectId, websiteUrl }: { projectId: string; website
               <AlertTitle>{e.form}</AlertTitle>
             </Alert>
           ) : null}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field id={id("depth")} label="Maximum depth" required error={e.maxDepth} hint={`Link hops from the start page (0–${CRAWL_LIMITS.maxDepth}).`}>
               <Input id={id("depth")} name="maxDepth" type="number" min={0} max={CRAWL_LIMITS.maxDepth} defaultValue={DEFAULT_CRAWL_CONFIG.maxDepth} />
             </Field>
@@ -138,7 +138,7 @@ function CrawlConfigForm({ projectId, websiteUrl }: { projectId: string; website
               <Input id={id("retries")} name="retries" type="number" min={0} max={CRAWL_LIMITS.maxRetries} defaultValue={DEFAULT_CRAWL_CONFIG.retries} />
             </Field>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field id={id("excl")} label="Exclusions" error={e.exclusions} hint="One per line. Substring (e.g. /tag/) or wildcard (e.g. /blog/*/comments).">
               <Textarea id={id("excl")} name="exclusions" rows={4} className="font-mono text-xs" placeholder={"/wp-admin\n/tag/\n*?replytocom=*"} />
             </Field>

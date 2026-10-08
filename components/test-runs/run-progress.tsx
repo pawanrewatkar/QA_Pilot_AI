@@ -15,9 +15,9 @@ import type { TestRunDetail } from "@/types";
 
 const ACTIVE = new Set(["PENDING", "RUNNING"]);
 const COUNT_TILES = [
-  { key: "PASS", label: "Passed", tone: "text-success" },
-  { key: "FAIL", label: "Failed", tone: "text-destructive" },
-  { key: "WARNING", label: "Warnings", tone: "text-warning" },
+  { key: "PASS", label: "Passed", tone: "text-success-text" },
+  { key: "FAIL", label: "Failed", tone: "text-destructive-text" },
+  { key: "WARNING", label: "Warnings", tone: "text-warning-text" },
   { key: "NOT EXECUTED", label: "Not executed", tone: "text-muted-foreground" },
   { key: "NOT APPLICABLE", label: "Not applicable", tone: "text-muted-foreground" },
 ] as const;
@@ -117,7 +117,7 @@ export function RunProgress({ initial }: { initial: TestRunDetail }) {
           </Alert>
         ) : null}
         {run.status === "CANCELLED" ? <p className="text-sm text-muted-foreground">The run was cancelled. Results recorded before cancellation are kept; nothing else was executed.</p> : null}
-        {error && active ? <p className="text-xs text-destructive">Progress update failed: {error}</p> : null}
+        {error && active ? <p className="text-xs text-destructive-text">Progress update failed: {error}</p> : null}
       </CardContent>
     </Card>
   );

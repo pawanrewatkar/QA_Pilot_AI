@@ -78,7 +78,7 @@ export function ResultTrendChart({ points }: { points: ResultTrendPoint[] }) {
           <div
             className="flex items-end gap-1 border-b border-border"
             style={{ height: CHART_HEIGHT }}
-            role="img"
+            role="group"
             aria-label={`Stacked bars of passed, warning and failed results across ${points.length} days. Use "Show as table" for exact values.`}
             onMouseLeave={() => setActive(null)}
           >

@@ -25,7 +25,7 @@ export async function generateMetadata({ params }: PageProps<"/projects/[id]">):
 
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid gap-1 py-3 sm:grid-cols-[180px_1fr] sm:gap-4">
+    <div className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[180px_1fr] sm:gap-4">
       <dt className="text-sm text-muted-foreground">{label}</dt>
       <dd className="min-w-0 text-sm break-words">{children}</dd>
     </div>
@@ -104,7 +104,7 @@ export default async function ProjectDetailPage({ params, searchParams }: PagePr
           <TabsTrigger value="bugs">Bugs ({bugs.length})</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="grid gap-4 lg:grid-cols-3">
+        <TabsContent value="overview" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Project details</CardTitle>
@@ -157,7 +157,7 @@ export default async function ProjectDetailPage({ params, searchParams }: PagePr
               <div>
                 <AlertTitle>How testing works</AlertTitle>
                 <p className="mt-1 text-muted-foreground">
-                  Crawl the site on <Link href={`/projects/${id}/pages`} className="text-primary hover:underline">Pages &amp; crawl</Link>, then start a test run. Results only appear for checks the browser actually executed.
+                  Crawl the site on <Link href={`/projects/${id}/pages`} className="text-primary underline underline-offset-2">Pages &amp; crawl</Link>, then start a test run. Results only appear for checks the browser actually executed.
                 </p>
               </div>
             </Alert>

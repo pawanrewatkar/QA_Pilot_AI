@@ -69,7 +69,7 @@ export default async function TestRunsPage({ searchParams }: PageProps<"/test-ru
                     <TableCell><RunStatusBadge status={r.status} /></TableCell>
                     <TableCell className="hidden tabular-nums sm:table-cell">{d.progressCompleted}/{d.progressTotal}</TableCell>
                     <TableCell className="text-xs whitespace-nowrap tabular-nums">
-                      <span className="text-success">{d.counts.PASS} pass</span> · <span className="text-destructive">{d.counts.FAIL} fail</span> · <span>{d.counts.WARNING} warn</span>
+                      <span className="text-success-text">{d.counts.PASS} pass</span> · <span className="text-destructive-text">{d.counts.FAIL} fail</span> · <span>{d.counts.WARNING} warn</span>
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">{formatDateTime(r.createdAt)}</TableCell>
                   </TableRow>

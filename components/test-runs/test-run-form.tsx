@@ -9,12 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, Input, Label, NativeSelect, Textarea } from "@/components/ui/form-controls";
-import { BROWSER_OPTIONS, IMPLEMENTED_MODULE_IDS, TEST_MODULE_GROUPS, TEST_SCOPE_OPTIONS, VIEWPORTS } from "@/lib/constants/testing";
+import { BROWSER_OPTIONS, IMPLEMENTED_MODULE_IDS, REPORT_FORMAT_OPTIONS, TEST_MODULE_GROUPS, TEST_SCOPE_OPTIONS, VIEWPORTS } from "@/lib/constants/testing";
 import { cn } from "@/lib/utils";
 import {
   CONTENT_EXCLUSIONS,
   DEFAULT_ADVANCED_OPTIONS,
+  GENERATED_REPORT_FORMATS,
   PAGE_TYPE_LABELS,
+  type GeneratedReportFormat,
   type BrowserName,
   type ContentComparisonMode,
   type ContentExclusion,
@@ -24,6 +26,9 @@ import {
   type TestConfiguration,
   type TypographyMode,
 } from "@/types";
+
+/** Report formats saved on a configuration that the generator supports. */
+const reportFormatsOf = (c: TestConfiguration): GeneratedReportFormat[] => GENERATED_REPORT_FORMATS.filter((f) => c.reportFormats.includes(f));
 
 interface Props {
   project: { id: string; name: string; hasTestEmail: boolean };
@@ -58,6 +63,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
   const [contentExclusions, setContentExclusions] = useState<ContentExclusion[]>([...DEFAULT_ADVANCED_OPTIONS.content.exclusions]);
   const [contentCustomSelectors, setContentCustomSelectors] = useState("");
   const [formFactors, setFormFactors] = useState<PerformanceFormFactor[]>([...DEFAULT_ADVANCED_OPTIONS.performance.formFactors]);
+  const [reportFormats, setReportFormats] = useState<GeneratedReportFormat[]>(initial ? reportFormatsOf(initial) : [...GENERATED_REPORT_FORMATS]);
   const [search, setSearch] = useState("");
   const [type, setType] = useState<PageType | "">("");
 
@@ -69,6 +75,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
     setBrowsers(config.browsers);
     setViewports(config.viewports);
     setPageIds(configurationPages[config.id] ?? []);
+    setReportFormats(reportFormatsOf(config));
   };
 
   const shown = testable.filter((p) => (!type || p.pageType === type) && (!search.trim() || `${p.url} ${p.name ?? ""}`.toLowerCase().includes(search.trim().toLowerCase())));
@@ -96,6 +103,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
         contentExclusions,
         contentCustomSelectors,
         performanceFormFactors: formFactors,
+        reportFormats,
       }),
     );
   };
@@ -114,7 +122,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
           <CardTitle>1. Run configuration</CardTitle>
           <CardDescription>Start from a saved configuration or choose everything below.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Field id={`${uid}-config`} label="Configuration" error={e.configurationId}>
             <NativeSelect id={`${uid}-config`} value={configurationId ?? ""} onChange={(ev) => (ev.target.value ? applyConfiguration(ev.target.value) : setConfigurationId(null))}>
               <option value="">Custom (no saved configuration)</option>
@@ -158,8 +166,8 @@ export function TestRunForm({ project, configurations, pages, configurationPages
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {e.pageIds ? <p className="text-sm text-destructive" role="alert">{e.pageIds}</p> : null}
-          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          {e.pageIds ? <p className="text-sm text-destructive-text" role="alert">{e.pageIds}</p> : null}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
               <Input aria-label="Search pages" type="search" className="pl-9" placeholder="Search pages" value={search} onChange={(ev) => setSearch(ev.target.value)} />
@@ -206,8 +214,8 @@ export function TestRunForm({ project, configurations, pages, configurationPages
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {e.modules ? <p className="text-sm text-destructive" role="alert">{e.modules}</p> : null}
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {e.modules ? <p className="text-sm text-destructive-text" role="alert">{e.modules}</p> : null}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {TEST_MODULE_GROUPS.map((group) => (
               <fieldset key={group.id} className="rounded-lg border p-3">
                 <legend className="px-1 text-sm font-semibold">{group.label}</legend>
@@ -217,7 +225,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
                       <Checkbox id={`${uid}-m-${m.id}`} checked={modules.includes(m.id)} onCheckedChange={(c) => setModules((l) => toggle(l, m.id, c === true))} />
                       <Label htmlFor={`${uid}-m-${m.id}`} className={cn("flex flex-wrap items-center gap-1.5 font-normal", !IMPLEMENTED.has(m.id) && "text-muted-foreground")}>
                         {m.label}
-                        {!IMPLEMENTED.has(m.id) ? <Badge variant="outline">later phase</Badge> : null}
+                        {!IMPLEMENTED.has(m.id) ? <Badge variant="outline">not available</Badge> : null}
                       </Label>
                     </li>
                   ))}
@@ -234,7 +242,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>4. Browsers</CardTitle>
@@ -246,14 +254,14 @@ export function TestRunForm({ project, configurations, pages, configurationPages
                 <Label htmlFor={`${uid}-b-${b.id}`} className="font-normal">{b.label}</Label>
               </div>
             ))}
-            {e.browsers ? <p className="text-xs text-destructive" role="alert">{e.browsers}</p> : null}
+            {e.browsers ? <p className="text-xs text-destructive-text" role="alert">{e.browsers}</p> : null}
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
             <CardTitle>5. Viewports</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {(["desktop", "mobile"] as const).map((kind) => (
               <fieldset key={kind} className="grid content-start gap-3">
                 <legend className="mb-1 flex items-center gap-2 text-sm font-medium">
@@ -268,7 +276,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
                 ))}
               </fieldset>
             ))}
-            {e.viewports ? <p className="text-xs text-destructive sm:col-span-2" role="alert">{e.viewports}</p> : null}
+            {e.viewports ? <p className="text-xs text-destructive-text sm:col-span-2" role="alert">{e.viewports}</p> : null}
           </CardContent>
         </Card>
       </div>
@@ -279,7 +287,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
             <CardTitle>Advanced module options</CardTitle>
             <CardDescription>Settings for the typography, content comparison and performance modules selected above.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-6 lg:grid-cols-3">
+          <CardContent className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             {modules.includes("typography") ? (
               <Field id={`${uid}-typo`} label="Typography reporting mode" required hint="Without a Figma or reference source, measured values are reported without invented expectations.">
                 <NativeSelect id={`${uid}-typo`} value={typographyMode} onChange={(ev) => setTypographyMode(ev.target.value as TypographyMode)}>
@@ -299,7 +307,7 @@ export function TestRunForm({ project, configurations, pages, configurationPages
                     <option value="SEMANTIC">Semantic comparison (needs an AI provider)</option>
                   </NativeSelect>
                 </Field>
-                {contentMode === "SEMANTIC" ? <p className="text-xs text-warning">No AI provider is configured, so semantic comparison will be recorded as NOT EXECUTED.</p> : null}
+                {contentMode === "SEMANTIC" ? <p className="text-xs text-warning-text">No AI provider is configured, so semantic comparison will be recorded as NOT EXECUTED.</p> : null}
                 <fieldset className="grid grid-cols-2 gap-2">
                   <legend className="mb-1 text-sm font-medium">Exclude from comparison</legend>
                   {CONTENT_EXCLUSIONS.map((x) => (
@@ -332,10 +340,36 @@ export function TestRunForm({ project, configurations, pages, configurationPages
 
       <Card>
         <CardHeader>
-          <CardTitle>6. Safety &amp; limits</CardTitle>
+          <CardTitle>6. Reports</CardTitle>
+          <CardDescription>Generated automatically by the worker when the run completes, and listed in the Report Center. Leave all unchecked to generate reports later from the run page.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <fieldset className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <legend className="sr-only">Report types</legend>
+            {REPORT_FORMAT_OPTIONS.map((f) => (
+              <div key={f.id} className="flex items-start gap-3">
+                <Checkbox
+                  id={`${uid}-r-${f.id}`}
+                  className="mt-0.5"
+                  checked={reportFormats.includes(f.id as GeneratedReportFormat)}
+                  onCheckedChange={(c) => setReportFormats((l) => toggle(l, f.id as GeneratedReportFormat, c === true))}
+                />
+                <div>
+                  <Label htmlFor={`${uid}-r-${f.id}`}>{f.label}</Label>
+                  <p className="text-xs text-muted-foreground">{f.description}</p>
+                </div>
+              </div>
+            ))}
+          </fieldset>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>7. Safety &amp; limits</CardTitle>
           <CardDescription>Form validation is always tested with submissions intercepted in the browser, so nothing is sent unless you allow it here.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-5 md:grid-cols-3">
+        <CardContent className="grid grid-cols-1 gap-5 md:grid-cols-3">
           <div className="space-y-2 md:col-span-3">
             <div className="flex items-start gap-3">
               <Checkbox id={`${uid}-submit`} checked={allowFormSubmission} onCheckedChange={(c) => setAllowFormSubmission(c === true)} className="mt-0.5" />

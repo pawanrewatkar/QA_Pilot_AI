@@ -694,6 +694,45 @@ ALTER TABLE reports ADD COLUMN kind TEXT CHECK (kind IS NULL OR kind IN ('PDF','
 CREATE INDEX idx_reports_bundle ON reports(bundle_id);
 `,
   },
+  {
+    version: 5,
+    name: "foreign_key_indexes",
+    sql: `
+-- Every foreign-key column gets an index, so ON DELETE CASCADE / SET NULL (e.g. deleting a project
+-- with thousands of results) and per-run lookups never scan whole tables. Additive only.
+CREATE INDEX IF NOT EXISTS idx_test_runs_configuration_id ON test_runs(configuration_id);
+CREATE INDEX IF NOT EXISTS idx_pages_last_crawl_run_id ON pages(last_crawl_run_id);
+CREATE INDEX IF NOT EXISTS idx_test_cases_page_id ON test_cases(page_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_page_id ON test_results(page_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_test_run_page_id ON test_results(test_run_page_id);
+CREATE INDEX IF NOT EXISTS idx_screenshots_test_result_id ON screenshots(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_accessibility_results_test_result_id ON accessibility_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_seo_results_test_result_id ON seo_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_link_results_test_result_id ON link_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_console_results_test_result_id ON console_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_network_results_test_result_id ON network_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_ui_results_screenshot_id ON ui_results(screenshot_id);
+CREATE INDEX IF NOT EXISTS idx_ui_results_test_result_id ON ui_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_typography_results_test_result_id ON typography_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_content_comparisons_document_id ON content_comparisons(document_id);
+CREATE INDEX IF NOT EXISTS idx_content_comparisons_test_result_id ON content_comparisons(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_figma_comparisons_screenshot_id ON figma_comparisons(screenshot_id);
+CREATE INDEX IF NOT EXISTS idx_figma_comparisons_test_result_id ON figma_comparisons(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_form_submissions_test_run_id ON form_submissions(test_run_id);
+CREATE INDEX IF NOT EXISTS idx_performance_results_test_result_id ON performance_results(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_last_seen_run_id ON bugs(last_seen_run_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_first_seen_run_id ON bugs(first_seen_run_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_page_id ON bugs(page_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_test_case_id ON bugs(test_case_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_test_result_id ON bugs(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_test_run_id ON bugs(test_run_id);
+CREATE INDEX IF NOT EXISTS idx_bug_evidence_test_result_id ON bug_evidence(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_bug_evidence_test_run_id ON bug_evidence(test_run_id);
+CREATE INDEX IF NOT EXISTS idx_bug_evidence_screenshot_id ON bug_evidence(screenshot_id);
+CREATE INDEX IF NOT EXISTS idx_bug_occurrences_test_result_id ON bug_occurrences(test_result_id);
+CREATE INDEX IF NOT EXISTS idx_report_bundles_test_run_id ON report_bundles(test_run_id);
+`,
+  },
 ];
 
 /** Every table the application expects after all migrations run. */

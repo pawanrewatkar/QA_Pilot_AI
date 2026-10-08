@@ -79,6 +79,7 @@ export async function createTestRun(db: DatabaseProvider, raw: unknown): Promise
       typographyMode: form.typographyMode,
       content: { mode: form.contentMode, exclusions: [...new Set(form.contentExclusions)], customSelectors: form.contentCustomSelectors },
       performance: { formFactors: form.performanceFormFactors.length ? [...new Set(form.performanceFormFactors)] : ["desktop"] },
+      reports: { formats: form.reportFormats },
     },
   });
   await db.activity.record({

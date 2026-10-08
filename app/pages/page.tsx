@@ -30,7 +30,7 @@ export default async function PagesPage({ searchParams }: PageProps<"/pages">) {
     <div className="space-y-6">
       <PageHeader title="Pages" description="Pages discovered by the crawler (navigation, sitemap, robots.txt) or added manually, with their detected page type." />
       {projects.length ? (
-        <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-[1fr_auto_auto_auto_auto] lg:items-end">
+        <form method="get" className="grid grid-cols-1 gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-[1fr_auto_auto_auto_auto] lg:items-end">
           <div className="grid gap-1.5">
             <Label htmlFor="q">Search</Label>
             <Input id="q" name="q" type="search" defaultValue={search} placeholder="URL, name or title" />
@@ -88,7 +88,7 @@ export default async function PagesPage({ searchParams }: PageProps<"/pages">) {
                   <TableCell className="max-w-96">
                     <p className="truncate font-medium">{p.name ?? p.title ?? "—"}</p>
                     <p className="truncate font-mono text-xs text-muted-foreground">{p.url}</p>
-                    {p.errorMessage ? <p className="truncate text-xs text-destructive">{p.errorMessage}</p> : null}
+                    {p.errorMessage ? <p className="truncate text-xs text-destructive-text">{p.errorMessage}</p> : null}
                   </TableCell>
                   <TableCell><Badge variant="secondary">{PAGE_TYPE_LABELS[p.pageType]}</Badge></TableCell>
                   <TableCell className="text-xs">{p.crawlStatus.charAt(0) + p.crawlStatus.slice(1).toLowerCase()}</TableCell>

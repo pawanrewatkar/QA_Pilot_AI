@@ -83,6 +83,8 @@ export interface ProjectRepository {
   update(id: string, input: ProjectInput): Promise<Project | null>;
   /** Deletes the project and every record that belongs to it. Returns false if it did not exist. */
   delete(id: string): Promise<boolean>;
+  /** Storage prefixes holding the project's run evidence and generated reports (read before deleting). */
+  storagePrefixes(id: string): Promise<string[]>;
   count(): Promise<number>;
 }
 
@@ -229,7 +231,7 @@ export interface ReportRepository {
   countBundles(query?: ReportBundleQuery): Promise<number>;
   getBundle(id: string): Promise<ReportBundleRecord | null>;
   /** Creates a GENERATING bundle for a finished run and enqueues the worker job in one transaction. */
-  requestBundle(testRunId: string): Promise<ReportBundleRecord>;
+  requestBundle(testRunId: string, kinds?: ReportKind[]): Promise<ReportBundleRecord>;
   /** Removes the bundle's records; the caller deletes the stored files. */
   deleteBundle(id: string): Promise<boolean>;
   getFile(bundleId: string, kind: string): Promise<ReportFileLocation | null>;

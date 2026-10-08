@@ -27,6 +27,8 @@ const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v
 function FileLink({ bundle, kind, view }: { bundle: ReportBundleRecord; kind: ReportKind; view?: boolean }) {
   const file = bundle.files.find((f) => f.kind === kind);
   const label = view ? "View" : `Download ${REPORT_KIND_LABELS[kind]}`;
+  // Formats not selected for this report are not offered.
+  if (!file && bundle.status !== "GENERATING") return null;
   if (!file || file.status !== "READY") {
     return (
       <Button variant="outline" size="sm" disabled title={file?.errorMessage ?? (bundle.status === "GENERATING" ? "Generating…" : "Not available")}>

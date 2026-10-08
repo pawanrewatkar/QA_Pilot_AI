@@ -101,7 +101,7 @@ export default async function BugPage({ params }: PageProps<"/bugs/[id]">) {
           {bug.severityReason ? <CardDescription>Severity: {bug.severityReason}</CardDescription> : null}
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Page name">{bug.pageName}</Field>
             <Field label="Page URL" mono>
               {bug.pageUrl ? (
@@ -132,7 +132,7 @@ export default async function BugPage({ params }: PageProps<"/bugs/[id]">) {
         <CardHeader>
           <CardTitle>Expected vs actual</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <TextBlock title="Expected result" text={bug.expectedResult} />
           <TextBlock title="Actual result" text={bug.actualResult} />
           <div className="lg:col-span-2">
@@ -156,7 +156,7 @@ export default async function BugPage({ params }: PageProps<"/bugs/[id]">) {
           {screenshots.length === 0 ? (
             <EmptyState compact icon={ImageOff} title="No screenshots" description="This failure was recorded with HTTP, console or DOM evidence only." />
           ) : (
-            <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {screenshots.map((e) => {
                 const src = `/api/artifacts?key=${encodeURIComponent(e.storageKey!)}`;
                 return (
@@ -200,7 +200,7 @@ export default async function BugPage({ params }: PageProps<"/bugs/[id]">) {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="overflow-hidden">
           <CardHeader>
             <CardTitle>Occurrences</CardTitle>

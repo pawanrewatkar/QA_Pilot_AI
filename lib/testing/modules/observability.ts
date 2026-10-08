@@ -145,7 +145,7 @@ export function unimplementedModule(id: string, label: string): TestModule {
       return [
         outcome.notExecuted(
           spec(id, "not-implemented", { title: label, feature: label, element: "—", steps: [], expected: `${label} checks` }),
-          `${label} is scheduled for a later phase of QA Pilot AI and was not executed in this run.`,
+          `${label} is not available in this version of QA Pilot AI and was not executed in this run.`,
         ),
       ];
     },

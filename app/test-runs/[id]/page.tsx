@@ -140,7 +140,7 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
           ) : null}
           {latestReport ? (
             <span className="ml-auto text-muted-foreground">
-              Latest report: <Link href="/reports" className="text-foreground hover:underline">{latestReport.status === "GENERATING" ? "generating…" : latestReport.status.toLowerCase()}</Link>
+              Latest report: <Link href="/reports" className="text-foreground underline underline-offset-2">{latestReport.status === "GENERATING" ? "generating…" : latestReport.status.toLowerCase()}</Link>
             </span>
           ) : null}
         </div>
@@ -150,7 +150,7 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
         <CardHeader>
           <CardTitle>Run configuration</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 text-sm md:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-4 text-sm md:grid-cols-2">
           <div>
             <p className="mb-1.5 text-muted-foreground">Modules</p>
             <div className="flex flex-wrap gap-1">{run.modules.map((m) => <Badge key={m} variant="secondary">{moduleLabel(m)}</Badge>)}</div>

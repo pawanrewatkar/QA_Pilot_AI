@@ -68,7 +68,7 @@ export default async function SettingsPage() {
 
       <section aria-labelledby="providers-heading" className="space-y-3">
         <h2 id="providers-heading" className="text-sm font-semibold text-muted-foreground">Providers</h2>
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {providers.map((p) => {
             const Icon = ICONS[p.id] ?? Layers;
             const state = STATE_BADGE[p.state];
@@ -105,7 +105,7 @@ export default async function SettingsPage() {
 
       <Card>
         <CardHeader className="flex-row items-start gap-3">
-          <ShieldCheck className="mt-0.5 size-5 text-success" aria-hidden />
+          <ShieldCheck className="mt-0.5 size-5 text-success-text" aria-hidden />
           <div className="space-y-1">
             <CardTitle>Data &amp; safety</CardTitle>
             <CardDescription>How QA Pilot AI treats results in this build.</CardDescription>

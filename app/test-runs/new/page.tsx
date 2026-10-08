@@ -30,7 +30,7 @@ export default async function NewTestRunPage({ searchParams }: PageProps<"/test-
         {projects.length === 0 ? (
           <EmptyState icon={FolderKanban} title="No projects yet" description="Create a project first." action={<Button asChild><Link href="/projects/new">Create project</Link></Button>} />
         ) : (
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {projects.map((p) => (
               <Card key={p.id} className="flex items-center justify-between gap-3 p-4">
                 <div className="min-w-0">

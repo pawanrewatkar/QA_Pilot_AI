@@ -31,7 +31,7 @@ export function getProviderStatuses(env: AppEnv): ProviderStatus[] {
       availability: "ACTIVE",
       detail:
         env.AI_PROVIDER === "anthropic" || has(env.ANTHROPIC_API_KEY)
-          ? "An external AI key or provider was configured, but external AI is not enabled in this phase. Deterministic local analysis is used; no data leaves the machine."
+          ? "An external AI key or provider was configured, but external AI is not implemented in this version. Deterministic local analysis is used; no data leaves the machine."
           : "Deterministic, rule-based analysis. No network calls. AI suggestions never create test results or evidence.",
       envKeys: ["AI_PROVIDER", "ANTHROPIC_API_KEY"],
     },

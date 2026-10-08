@@ -70,13 +70,13 @@ export default async function TestCasesPage({ searchParams }: PageProps<"/test-c
                         ]
                           .filter(([, v]) => v)
                           .map(([k, v]) => (
-                            <div key={k} className="grid gap-0.5 sm:grid-cols-[100px_1fr]">
+                            <div key={k} className="grid grid-cols-1 gap-0.5 sm:grid-cols-[100px_1fr]">
                               <dt className="text-muted-foreground">{k}</dt>
                               <dd className="break-words">{v}</dd>
                             </div>
                           ))}
                         {c.steps.length ? (
-                          <div className="grid gap-0.5 sm:grid-cols-[100px_1fr]">
+                          <div className="grid grid-cols-1 gap-0.5 sm:grid-cols-[100px_1fr]">
                             <dt className="text-muted-foreground">Steps</dt>
                             <dd><ol className="list-decimal pl-4">{c.steps.map((s, i) => <li key={i}>{s}</li>)}</ol></dd>
                           </div>

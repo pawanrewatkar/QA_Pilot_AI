@@ -4,6 +4,7 @@ import { generateReportBundle } from "@/lib/reports/generate";
 import { PlaywrightPdfRenderer } from "@/lib/reports/pdf";
 import { executeCrawl } from "../crawler/crawl-job";
 import { executeRun } from "../test-engine/run-executor";
+import type { ReportKind } from "@/types";
 import type { Job, JobType } from "./job-queue";
 
 export interface JobContext {
@@ -28,8 +29,8 @@ export const JOB_HANDLERS: Partial<Record<JobType, JobHandler>> = {
     ctx.log(`Run ${testRunId} ${summary.status}: ${summary.results} results${summary.error ? ` (${summary.error})` : ""}`);
   },
   "report.generate": async (job, ctx) => {
-    const { reportBundleId } = job.payload as { reportBundleId: string };
-    const outcome = await generateReportBundle(ctx.store.database, ctx.storage, reportBundleId, new PlaywrightPdfRenderer());
+    const { reportBundleId, kinds } = job.payload as { reportBundleId: string; kinds?: ReportKind[] };
+    const outcome = await generateReportBundle(ctx.store.database, ctx.storage, reportBundleId, new PlaywrightPdfRenderer(), kinds);
     ctx.log(`Report ${reportBundleId} ${outcome.status}: ${outcome.files.map((f) => `${f.kind} ${f.status}`).join(", ")}`);
   },
 };

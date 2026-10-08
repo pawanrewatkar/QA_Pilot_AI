@@ -82,7 +82,7 @@ export default async function ProjectsPage({ searchParams }: PageProps<"/project
         />
       ) : (
         <>
-          <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
+          <form method="get" role="search" className="grid grid-cols-1 gap-3 rounded-xl border bg-card p-4 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
             <div className="grid gap-1.5">
               <Label htmlFor="q">Search</Label>
               <div className="relative">

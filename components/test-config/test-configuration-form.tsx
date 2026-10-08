@@ -17,7 +17,6 @@ import {
   MAX_MANUAL_URLS,
   MODULE_REQUIREMENT_LABELS,
   REPORT_FORMAT_OPTIONS,
-  REPORT_SECTION_OPTIONS,
   TEST_MODULE_GROUPS,
   TEST_SCOPE_OPTIONS,
   VIEWPORTS,
@@ -66,7 +65,8 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
   const [browsers, setBrowsers] = useState<BrowserName[]>(initial?.browsers ?? ["chromium"]);
   const [viewports, setViewports] = useState<string[]>(initial?.viewports ?? ["desktop-1440x900", "mobile-390x844"]);
   const [reportFormats, setReportFormats] = useState<ReportFormat[]>(initial?.reportFormats ?? ["EXCEL", "PDF"]);
-  const [reportSections, setReportSections] = useState<ReportSections>(initial?.reportSections ?? DEFAULT_REPORT_SECTIONS);
+  // Sections are kept on the configuration for compatibility; reports always include every section with data.
+  const [reportSections] = useState<ReportSections>(initial?.reportSections ?? DEFAULT_REPORT_SECTIONS);
 
   const selectedModules = useMemo(() => new Set(modules), [modules]);
   const allState = groupState(selectedModules, ALL_TEST_MODULE_IDS);
@@ -123,7 +123,7 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
 
           <fieldset className="grid gap-2">
             <legend className="mb-2 text-sm font-medium">Testing scope</legend>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               {TEST_SCOPE_OPTIONS.map((opt) => (
                 <label
                   key={opt.id}
@@ -167,7 +167,7 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
                   ))}
                 </ul>
               )}
-              {e.selectedPageIds ? <p className="text-xs text-destructive" role="alert">{e.selectedPageIds}</p> : null}
+              {e.selectedPageIds ? <p className="text-xs text-destructive-text" role="alert">{e.selectedPageIds}</p> : null}
             </div>
           ) : null}
 
@@ -211,8 +211,8 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
           </div>
         </CardHeader>
         <CardContent className="grid gap-5">
-          {e.modules ? <p className="text-sm text-destructive" role="alert">{e.modules}</p> : null}
-          <div className="grid gap-4 md:grid-cols-2">
+          {e.modules ? <p className="text-sm text-destructive-text" role="alert">{e.modules}</p> : null}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {TEST_MODULE_GROUPS.map((group) => {
               const ids = group.modules.map((m) => m.id);
               return (
@@ -270,7 +270,7 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>3. Browsers</CardTitle>
@@ -283,7 +283,7 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
                 <Label htmlFor={`${uid}-b-${b.id}`} className="font-normal">{b.label}</Label>
               </div>
             ))}
-            {e.browsers ? <p className="text-xs text-destructive" role="alert">{e.browsers}</p> : null}
+            {e.browsers ? <p className="text-xs text-destructive-text" role="alert">{e.browsers}</p> : null}
           </CardContent>
         </Card>
 
@@ -292,7 +292,7 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
             <CardTitle>4. Viewports</CardTitle>
             <CardDescription>Screen sizes for each page.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {(["desktop", "mobile"] as const).map((kind) => (
               <fieldset key={kind} className="grid content-start gap-3">
                 <legend className="mb-1 flex items-center gap-2 text-sm font-medium">
@@ -307,7 +307,7 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
                 ))}
               </fieldset>
             ))}
-            {e.viewports ? <p className="text-xs text-destructive sm:col-span-2" role="alert">{e.viewports}</p> : null}
+            {e.viewports ? <p className="text-xs text-destructive-text sm:col-span-2" role="alert">{e.viewports}</p> : null}
           </CardContent>
         </Card>
       </div>
@@ -315,9 +315,9 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
       <Card>
         <CardHeader>
           <CardTitle>5. Reports</CardTitle>
-          <CardDescription>Formats and sections to generate after a run completes. Report generation is enabled in a later phase.</CardDescription>
+          <CardDescription>Formats generated automatically when a run that uses this configuration completes. They can be changed when starting the run.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-6 md:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <fieldset className="grid content-start gap-3">
             <legend className="mb-1 text-sm font-medium">Formats</legend>
             {REPORT_FORMAT_OPTIONS.map((f) => (
@@ -330,19 +330,10 @@ export function TestConfigurationForm({ project, pages, initial, action }: Props
               </div>
             ))}
           </fieldset>
-          <fieldset className="grid content-start gap-3">
-            <legend className="mb-1 text-sm font-medium">Sections</legend>
-            {REPORT_SECTION_OPTIONS.map((s) => (
-              <div key={s.id} className="flex items-center gap-3">
-                <Checkbox
-                  id={`${uid}-s-${s.id}`}
-                  checked={reportSections[s.id]}
-                  onCheckedChange={(c) => setReportSections((r) => ({ ...r, [s.id]: c === true }))}
-                />
-                <Label htmlFor={`${uid}-s-${s.id}`} className="font-normal">{s.label}</Label>
-              </div>
-            ))}
-          </fieldset>
+          <p className="text-sm text-muted-foreground">
+            Every report includes all sections that have recorded data for the run (summary, pages, test cases, bugs, screenshots and the
+            per-module results). Sections without data say so instead of being filled in.
+          </p>
         </CardContent>
       </Card>
 

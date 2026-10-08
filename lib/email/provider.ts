@@ -1,6 +1,6 @@
 /**
  * Outbound email (report delivery, run notifications). No external service is used in
- * this phase; a future SMTP/API provider implements the same interface.
+ * this version; a future SMTP/API provider implements the same interface.
  */
 export interface EmailProvider {
   readonly id: string;

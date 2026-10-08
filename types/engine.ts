@@ -197,7 +197,15 @@ export interface TestRunOptions {
   performance?: {
     formFactors: PerformanceFormFactor[];
   };
+  /** Report formats generated automatically when the run completes (none: generate on demand). */
+  reports?: {
+    formats: GeneratedReportFormat[];
+  };
 }
+
+/** Report formats the report generator produces. EXCEL means both the testing and the bug workbook. */
+export const GENERATED_REPORT_FORMATS = ["PDF", "HTML", "EXCEL"] as const;
+export type GeneratedReportFormat = (typeof GENERATED_REPORT_FORMATS)[number];
 
 export const DEFAULT_ADVANCED_OPTIONS: Required<Pick<TestRunOptions, "typographyMode" | "content" | "performance">> = {
   typographyMode: "TYPOGRAPHY_TAGS",
@@ -211,6 +219,7 @@ export function resolveRunOptions(options: TestRunOptions): Required<TestRunOpti
     typographyMode: options.typographyMode ?? DEFAULT_ADVANCED_OPTIONS.typographyMode,
     content: options.content ?? DEFAULT_ADVANCED_OPTIONS.content,
     performance: options.performance ?? DEFAULT_ADVANCED_OPTIONS.performance,
+    reports: options.reports ?? { formats: [] },
   };
 }
 
