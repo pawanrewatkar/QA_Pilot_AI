@@ -1,4 +1,5 @@
 import type { RunComparison } from "@/lib/regression/compare";
+import type { ExternalCaseRecord, ExternalExecutionRecord, ExternalStatus, NewExternalExecution } from "@/lib/external-tests/types";
 import type {
   HistoryQuery,
   ReportBundleRecord,
@@ -61,6 +62,7 @@ export interface DatabaseProvider {
   bugs: BugRepository;
   reports: ReportRepository;
   history: HistoryRepository;
+  externalTests: ExternalTestRepository;
   activity: ActivityRepository;
   dashboard: DashboardRepository;
 
@@ -113,6 +115,8 @@ export interface NewTestRun {
   pageIds: string[];
   configurationName: string | null;
   options: TestRunOptions;
+  /** Defaults to WEBSITE; EXTERNAL_TEST_CASE runs are created through ExternalTestRepository. */
+  runType?: "WEBSITE" | "EXTERNAL_TEST_CASE";
 }
 
 export interface TestRunRepository {
@@ -235,6 +239,17 @@ export interface ReportRepository {
   /** Removes the bundle's records; the caller deletes the stored files. */
   deleteBundle(id: string): Promise<boolean>;
   getFile(bundleId: string, kind: string): Promise<ReportFileLocation | null>;
+}
+
+/** External Test Case Testing executions (each one is a test run of type EXTERNAL_TEST_CASE). */
+export interface ExternalTestRepository {
+  /** Creates the run, the execution record and its cases, and enqueues the run, in one transaction. Returns the run id. */
+  create(input: NewExternalExecution): Promise<string>;
+  get(runId: string): Promise<ExternalExecutionRecord | null>;
+  list(query?: { projectId?: string; limit?: number; offset?: number }): Promise<ExternalExecutionRecord[]>;
+  count(query?: { projectId?: string }): Promise<number>;
+  listCases(runId: string, query?: { status?: ExternalStatus; limit?: number; offset?: number }): Promise<{ rows: ExternalCaseRecord[]; total: number }>;
+  getOutputFile(runId: string): Promise<{ storageKey: string; fileName: string } | null>;
 }
 
 export interface HistoryRepository {

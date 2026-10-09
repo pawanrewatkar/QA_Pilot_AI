@@ -125,7 +125,7 @@ const emptyCounts = (): ResultStatusCounts => ({ PASS: 0, FAIL: 0, WARNING: 0, "
 export const moduleLabel = (id: string) => (id === "page-load" ? "Page Load" : getTestModule(id)?.label ?? id);
 const redactOrNull = (s: string | null) => (s === null ? null : redactText(s));
 
-export const deviceOf = (viewport: string | null) => (viewport ? (viewport.startsWith("mobile") ? "Mobile" : viewport.startsWith("desktop") ? "Desktop" : viewport) : null);
+export const deviceOf = (viewport: string | null) => (viewport ? (viewport.startsWith("mobile") ? "Mobile" : viewport.startsWith("tablet") ? "Tablet" : viewport.startsWith("desktop") ? "Desktop" : viewport) : null);
 
 export async function loadReportData(db: SqliteDatabase, runId: string): Promise<ReportData> {
   const detail = runDetail(db, runId);
@@ -186,7 +186,7 @@ export async function loadReportData(db: SqliteDatabase, runId: string): Promise
       section: d.section,
       testType: d.testType ? moduleLabel(d.testType) : null,
       scenarioType: d.scenarioType,
-      device: viewport ? `${deviceOf(viewport)} (${viewport.replace(/^(desktop|mobile)-/, "")})` : null,
+      device: viewport ? `${deviceOf(viewport)} (${viewport.replace(/^(desktop|mobile|tablet)-/, "")})` : null,
       browser: occ?.browser ?? d.browser,
       severity: d.severity,
       priority: d.priority,

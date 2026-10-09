@@ -163,6 +163,28 @@ const pages: Record<string, (ext: string) => string> = {
       </ul>`,
     ),
   "/products/gadget": () => layout("Gadget", `<h1>Gadget</h1><span class="price">$9</span>`),
+  // Client-side sorting, used by the External Test Case Testing acceptance test.
+  "/catalog": () =>
+    layout(
+      "Catalog",
+      `<h1>Catalog</h1>
+      <label for="sort">Sort by</label>
+      <select id="sort"><option value="featured">Featured</option><option value="asc">Price: Low to High</option><option value="desc">Price: High to Low</option></select>
+      <ul id="catalog">
+        <li class="item"><span class="name">Lamp</span> <span class="price">$30</span></li>
+        <li class="item"><span class="name">Mug</span> <span class="price">$10</span></li>
+        <li class="item"><span class="name">Desk</span> <span class="price">$20</span></li>
+      </ul>
+      <script>
+        document.getElementById("sort").addEventListener("change", (e) => {
+          const list = document.getElementById("catalog");
+          const items = [...list.children];
+          const price = (li) => Number(li.querySelector(".price").textContent.replace("$", ""));
+          if (e.target.value === "featured") return;
+          items.sort((a, b) => (e.target.value === "asc" ? price(a) - price(b) : price(b) - price(a))).forEach((li) => list.appendChild(li));
+        });
+      </script>`,
+    ),
   "/checkout": () =>
     layout(
       "Checkout",

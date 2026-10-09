@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, Locator } from "playwright";
-import { VIEWPORTS } from "@/lib/constants/testing";
+import { findViewport } from "@/lib/constants/testing";
 import type { SqliteEngineStore, RunForExecution } from "@/lib/database/local/engine-store";
 import { createContext, launchBrowser } from "@/lib/playwright/browsers";
 import { describeBrowserError } from "@/lib/playwright/errors";
@@ -14,6 +14,8 @@ import { createReferenceLoader } from "./reference-document";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import { sensitiveMask } from "@/lib/playwright/masking";
 import { LocalReportRepository } from "@/lib/database/local/report-repository";
+import { finalizeExternalRun } from "@/lib/external-tests/finalize";
+import { EXTERNAL_CASES_KEY, EXTERNAL_SINK_KEY, type ExternalObservationInput } from "@/lib/external-tests/module";
 import type { BrowserName, EvidenceItem, ReportKind, Viewport } from "@/types";
 
 const MAX_SCREENSHOTS_PER_PAGE_COMBO = 25;
@@ -66,7 +68,7 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   if (!run) return { status: "FAILED", results: 0, error: "Test run not found" };
   if (run.status !== "PENDING") return { status: "FAILED", results: 0, error: `Run is ${run.status}, not PENDING` };
 
-  const viewports = run.snapshot.viewports.map((id) => VIEWPORTS.find((v) => v.id === id)).filter((v): v is Viewport => !!v);
+  const viewports = run.snapshot.viewports.map((id) => findViewport(id)).filter((v): v is Viewport => !!v);
   const browsers = run.snapshot.browsers;
   const plan = planExecution(run.snapshot.modules);
   const total = run.pages.length * browsers.length * viewports.length;
@@ -87,6 +89,19 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   const runPageIds = new Map<string, string>();
   /** Run-scoped state shared by modules across pages (e.g. SEO metadata for duplicate detection). */
   const shared = new Map<string, unknown>();
+  if (run.runType === "EXTERNAL_TEST_CASE") {
+    // External Test Case Testing: the cases and a sink for per-device observations (see lib/external-tests/module.ts).
+    shared.set(EXTERNAL_CASES_KEY, store.getExternalCases(runId));
+    shared.set(EXTERNAL_SINK_KEY, (o: ExternalObservationInput) => store.saveExternalObservation(runId, o));
+  }
+  const finalizeExternal = async (reason: string | null) => {
+    if (run.runType !== "EXTERNAL_TEST_CASE") return;
+    try {
+      await finalizeExternalRun(store.database, deps.storage, runId, reason);
+    } catch (error) {
+      log(`Finalizing external test cases for run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   const referenceDocument = createReferenceLoader(store, deps.storage, run.projectId);
   let completed = 0;
   let resultCount = 0;
@@ -176,6 +191,7 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`Run ${runId} failed: ${message}`);
+    await finalizeExternal(`This test case was not executed because the run stopped: ${message}`);
     store.finishRun(runId, "FAILED", message);
     store.recordActivity(run.projectId, "test_run", runId, "failed", `Test run failed: ${message.slice(0, 200)}`);
     return { status: "FAILED", results: resultCount, error: message };
@@ -203,6 +219,7 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
     log(`Bug creation for run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  await finalizeExternal(cancelled ? "The execution was cancelled before this test case ran." : null);
   for (const id of runPageIds.values()) store.finishRunPage(id, cancelled ? "CANCELLED" : "COMPLETED", null);
   const status = cancelled ? "CANCELLED" : "COMPLETED";
   store.finishRun(runId, status, null);

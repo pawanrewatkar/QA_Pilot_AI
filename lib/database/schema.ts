@@ -733,6 +733,72 @@ CREATE INDEX IF NOT EXISTS idx_bug_occurrences_test_result_id ON bug_occurrences
 CREATE INDEX IF NOT EXISTS idx_report_bundles_test_run_id ON report_bundles(test_run_id);
 `,
   },
+  {
+    version: 6,
+    name: "external_test_cases",
+    sql: `
+-- External Test Case Testing reuses test_runs (progress, cancellation, results, evidence, bugs, history).
+ALTER TABLE test_runs ADD COLUMN run_type TEXT NOT NULL DEFAULT 'WEBSITE' CHECK (run_type IN ('WEBSITE','EXTERNAL_TEST_CASE'));
+CREATE INDEX idx_test_runs_type ON test_runs(run_type, created_at);
+
+-- One row per external execution: where the cases came from and how results are written back.
+CREATE TABLE external_test_executions (
+  test_run_id TEXT PRIMARY KEY REFERENCES test_runs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  website_url TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('UPLOAD','LOCAL_PATH','GOOGLE_DRIVE')),
+  source_name TEXT NOT NULL,
+  source_storage_key TEXT NOT NULL,
+  worksheet TEXT NOT NULL,
+  header_row INTEGER NOT NULL,
+  mapping TEXT NOT NULL DEFAULT '{}',
+  output_mode TEXT NOT NULL CHECK (output_mode IN ('EXISTING_SHEET','NEW_SHEET')),
+  result_columns TEXT,
+  output_storage_key TEXT,
+  output_file_name TEXT,
+  output_error TEXT,
+  created_at TEXT NOT NULL DEFAULT ${NOW}
+);
+CREATE INDEX idx_external_test_executions_project ON external_test_executions(project_id, created_at);
+
+-- One row per test case read from the worksheet. Status uses this module's statuses, which add
+-- HUMAN INTERACTION to the standard set; it stays NULL until the case has been evaluated.
+CREATE TABLE external_test_cases (
+  id TEXT PRIMARY KEY,
+  test_run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+  row_number INTEGER NOT NULL,
+  case_ref TEXT,
+  title TEXT NOT NULL,
+  steps TEXT,
+  expected TEXT,
+  url TEXT,
+  test_data TEXT,
+  preconditions TEXT,
+  status TEXT CHECK (status IS NULL OR status IN ('PASS','FAIL','HUMAN INTERACTION','NOT EXECUTED','NOT APPLICABLE')),
+  actual_result TEXT,
+  executed_at TEXT,
+  UNIQUE (test_run_id, row_number)
+);
+
+-- The outcome of one case in one browser × viewport, linked to the standard test result and its evidence.
+CREATE TABLE external_test_observations (
+  id TEXT PRIMARY KEY,
+  external_case_id TEXT NOT NULL REFERENCES external_test_cases(id) ON DELETE CASCADE,
+  test_run_id TEXT NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
+  test_result_id TEXT REFERENCES test_results(id) ON DELETE SET NULL,
+  browser TEXT NOT NULL,
+  viewport TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('PASS','FAIL','HUMAN INTERACTION','NOT EXECUTED','NOT APPLICABLE')),
+  actual_result TEXT NOT NULL,
+  screenshot_key TEXT,
+  duration_ms INTEGER,
+  observed_at TEXT NOT NULL,
+  UNIQUE (external_case_id, browser, viewport)
+);
+CREATE INDEX idx_external_test_observations_run ON external_test_observations(test_run_id);
+CREATE INDEX idx_external_test_observations_test_result_id ON external_test_observations(test_result_id);
+`,
+  },
 ];
 
 /** Every table the application expects after all migrations run. */
@@ -768,6 +834,9 @@ export const EXPECTED_TABLES = [
   "bug_occurrences",
   "bug_status_history",
   "report_bundles",
+  "external_test_executions",
+  "external_test_cases",
+  "external_test_observations",
 ] as const;
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

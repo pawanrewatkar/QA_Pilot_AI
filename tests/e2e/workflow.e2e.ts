@@ -14,6 +14,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import AxeBuilder from "@axe-core/playwright";
+import ExcelJS from "exceljs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startFixtureSite, type FixtureSite } from "../fixtures/site-server";
@@ -186,10 +187,59 @@ describe.skipIf(!built || !browserInstalled("chromium"))("complete workflow thro
     expect(stillFailing).toBeGreaterThan(0);
   }, 360_000);
 
+  let externalRunId = "";
+  it("executes external Excel test cases through the UI and returns the results workbook", async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Read me").addRow(["Sample"]);
+    const ws = wb.addWorksheet("Regression");
+    ws.addRow(["TC ID", "Test Case", "Page URL", "Test Steps", "Expected Result"]);
+    ws.addRow(["TC01", "Navigate to About", "", "1. Open homepage\n2. Click About", "User is redirected to the About page"]);
+    ws.addRow(["TC02", "Login with OTP", "/login", "Enter the OTP received by SMS", "User is logged in"]);
+    ws.addRow(["TC03", "Privacy terms heading", "", "Open homepage\nClick Privacy", '"Terms and Conditions" should be displayed']);
+    ws.addRow(["TC04", "Verify product sorting", "/catalog", "", "Products should be sorted from low to high price."]);
+    ws.addRow(["TC05", "Careers page", "", "Click Careers", "Careers page opens"]);
+    const file = path.join(dataDir, "external-cases.xlsx");
+    await wb.xlsx.writeFile(file);
+
+    await page.goto(`${base}/external-test-cases`);
+    await page.getByLabel("Website URL").fill(`${site.origin}/`);
+    await page.getByLabel("Execution name").fill("E2E external");
+    await page.getByLabel("Excel file").setInputFiles(file);
+    await page.getByRole("button", { name: "Load workbook" }).click();
+    const sheetSelect = page.getByLabel("Worksheet to execute");
+    await sheetSelect.waitFor({ timeout: 30_000 });
+    await expect.poll(() => sheetSelect.inputValue()).toBe("Regression");
+    await expect.poll(() => page.getByLabel(/^Expected Result/).inputValue()).not.toBe("");
+    await page.getByRole("checkbox", { name: "Tablet", exact: true }).click();
+    await page.getByRole("radio", { name: /Existing Sheet/ }).click();
+    await page.getByRole("button", { name: "Start test" }).click();
+    await page.waitForURL(/\/external-test-cases\/[0-9a-f-]{36}$/, { timeout: 60_000 });
+    externalRunId = new URL(page.url()).pathname.split("/").pop()!;
+    const exec = await waitFor(async () => {
+      const e = (await (await fetch(`${base}/api/external-test-cases/${externalRunId}`)).json()) as { runStatus: string; outputFileName: string | null; counts: Record<string, number> };
+      return e.runStatus === "COMPLETED" && e.outputFileName ? e : null;
+    }, 300_000, "external execution");
+    expect(exec.counts).toEqual({ PASS: 2, FAIL: 1, "HUMAN INTERACTION": 1, "NOT EXECUTED": 1, "NOT APPLICABLE": 0 });
+
+    await page.reload();
+    await page.getByRole("link", { name: "Download Excel" }).waitFor({ timeout: 15_000 });
+    const res = await page.request.get(`${base}/api/external-test-cases/${externalRunId}/download`);
+    expect(res.headers()["content-disposition"]).toMatch(/QA_External_Test_Result_127\.0\.0\.1_\d{4}-\d{2}-\d{2}\.xlsx/);
+    const out = new ExcelJS.Workbook();
+    await out.xlsx.load((await res.body()) as unknown as ArrayBuffer);
+    const sheet = out.getWorksheet("Regression")!;
+    expect([6, 7, 8].map((c) => sheet.getRow(1).getCell(c).value)).toEqual(["Actual Result", "Status", "Date"]);
+    expect([2, 3, 4, 5, 6].map((r) => sheet.getRow(r).getCell(7).value)).toEqual(["PASS", "HUMAN INTERACTION", "FAIL", "PASS", "NOT EXECUTED"]);
+    expect(String(sheet.getRow(3).getCell(6).value)).toContain("This test case needs human interaction.");
+
+    await page.goto(`${base}/history`);
+    await expect(page.getByText("External test cases").count()).resolves.toBeGreaterThan(0);
+  }, 420_000);
+
   it("has no serious accessibility violations or phone-width overflow on the main pages", async () => {
     const bug = await (await fetch(`${base}/bugs`)).text();
     const bugId = /href="\/bugs\/([0-9a-f-]{36})"/.exec(bug)?.[1];
-    const paths = ["/", "/projects", `/projects/${projectId}`, `/projects/${projectId}/pages`, "/test-runs", `/test-runs/${runIds[0]}`, `/test-runs/${runIds[1]}/compare`, "/test-runs/new", "/pages", "/test-cases", "/bugs", `/bugs/${bugId}`, "/reports", "/history", "/settings", "/copyright", "/projects/new"];
+    const paths = ["/", "/projects", `/projects/${projectId}`, `/projects/${projectId}/pages`, "/test-runs", `/test-runs/${runIds[0]}`, `/test-runs/${runIds[1]}/compare`, "/test-runs/new", "/pages", "/test-cases", "/bugs", `/bugs/${bugId}`, "/reports", "/history", "/settings", "/copyright", "/projects/new", "/external-test-cases", `/external-test-cases/${externalRunId}`];
     const problems: string[] = [];
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
     for (const p of paths) {

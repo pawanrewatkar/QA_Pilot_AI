@@ -37,10 +37,12 @@ function Ratio({ value, label }: { value: { failed: number; executed: number } |
 
 function RunRow({ r }: { r: RunHistoryRecord }) {
   const c = r.counts;
+  const href = r.runType === "EXTERNAL_TEST_CASE" ? `/external-test-cases/${r.id}` : `/test-runs/${r.id}`;
   return (
     <TableRow className="align-top">
       <TableCell className="min-w-48">
-        <Link href={`/test-runs/${r.id}`} className="font-medium hover:underline">{r.name ?? `Run ${r.id.slice(0, 8)}`}</Link>
+        <Link href={href} className="font-medium hover:underline">{r.name ?? `Run ${r.id.slice(0, 8)}`}</Link>
+        {r.runType === "EXTERNAL_TEST_CASE" ? <Badge variant="outline" className="ml-1.5">External test cases</Badge> : null}
         <p className="text-xs text-muted-foreground">{formatDateTime(r.completedAt ?? r.createdAt)}</p>
         <p className="text-xs text-muted-foreground md:hidden">{r.projectName}</p>
       </TableCell>
@@ -73,7 +75,7 @@ function RunRow({ r }: { r: RunHistoryRecord }) {
       <TableCell>
         <div className="flex justify-end gap-1">
           <Button variant="outline" size="sm" asChild>
-            <Link href={`/test-runs/${r.id}`}>Open</Link>
+            <Link href={href}>Open</Link>
           </Button>
           {r.status !== "PENDING" && r.status !== "RUNNING" ? (
             <Button variant="ghost" size="sm" asChild>

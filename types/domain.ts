@@ -233,7 +233,7 @@ export interface BugQuery {
   pageId?: string;
   testType?: string;
   browser?: string;
-  device?: "desktop" | "mobile";
+  device?: "desktop" | "mobile" | "tablet";
   limit?: number;
   offset?: number;
 }
@@ -282,6 +282,8 @@ export interface ReportBundleRecord {
 export interface RunHistoryRecord {
   id: string;
   name: string | null;
+  /** WEBSITE for module runs, EXTERNAL_TEST_CASE for External Test Case Testing executions. */
+  runType: "WEBSITE" | "EXTERNAL_TEST_CASE";
   projectId: string;
   projectName: string;
   website: string;

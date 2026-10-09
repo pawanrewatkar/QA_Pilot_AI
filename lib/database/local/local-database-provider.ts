@@ -34,6 +34,7 @@ import type {
   ProjectRepository,
   ReportRepository,
   HistoryRepository,
+  ExternalTestRepository,
   TestCaseRepository,
   TestConfigurationRepository,
   TestRunRepository,
@@ -52,6 +53,7 @@ import {
 } from "./engine-repositories";
 import { LocalBugRepository } from "./bug-repository";
 import { LocalHistoryRepository } from "./history-repository";
+import { LocalExternalTestRepository } from "./external-test-repository";
 import { LocalReportRepository } from "./report-repository";
 import { getSchemaVersion, openSqlite, runMigrations, type SqliteDatabase } from "./sqlite-client";
 
@@ -547,6 +549,7 @@ export class LocalDatabaseProvider implements DatabaseProvider {
   readonly bugs: BugRepository;
   readonly reports: ReportRepository;
   readonly history: HistoryRepository;
+  readonly externalTests: ExternalTestRepository;
   readonly activity: ActivityRepository;
   readonly dashboard: DashboardRepository;
 
@@ -567,6 +570,7 @@ export class LocalDatabaseProvider implements DatabaseProvider {
     this.bugs = new LocalBugRepository(db);
     this.reports = new LocalReportRepository(db);
     this.history = new LocalHistoryRepository(db);
+    this.externalTests = new LocalExternalTestRepository(db);
     this.activity = new LocalActivityRepository(db);
     this.dashboard = new LocalDashboardRepository(db);
   }

@@ -27,6 +27,10 @@ export interface HttpResult {
   contentType: string | null;
   contentLength: number | null;
   body?: string;
+  /** Raw body when `readBody: "bytes"` was requested. */
+  bytes?: Uint8Array;
+  /** True when the body was cut at maxBodyBytes. */
+  truncated?: boolean;
   error?: { kind: HttpErrorKind; message: string };
   durationMs: number;
 }
@@ -35,7 +39,8 @@ export interface FetchOptions {
   method?: "GET" | "HEAD";
   timeoutMs?: number;
   maxRedirects?: number;
-  readBody?: boolean;
+  /** true / "text": decode the body as text; "bytes": return it raw (e.g. a downloaded workbook). */
+  readBody?: boolean | "text" | "bytes";
   maxBodyBytes?: number;
   /** Called for every redirect target; returning false stops following (result keeps the 3xx). */
   allowRedirect?: (from: string, to: string) => boolean;
@@ -129,8 +134,13 @@ export async function fetchUrl(input: string, options: FetchOptions = {}): Promi
     const contentType = response.headers.get("content-type");
     const lengthHeader = response.headers.get("content-length");
     let body: string | undefined;
+    let bytes: Uint8Array | undefined;
+    let truncated = false;
     if (options.readBody && method === "GET") {
-      body = await readLimited(response, options.maxBodyBytes ?? 5 * 1024 * 1024);
+      const read = await readLimited(response, options.maxBodyBytes ?? 5 * 1024 * 1024);
+      truncated = read.truncated;
+      if (options.readBody === "bytes") bytes = read.bytes;
+      else body = new TextDecoder().decode(read.bytes);
     } else {
       await response.body?.cancel().catch(() => undefined);
     }
@@ -141,12 +151,15 @@ export async function fetchUrl(input: string, options: FetchOptions = {}): Promi
       contentType,
       contentLength: lengthHeader ? Number(lengthHeader) : null,
       body,
+      ...(bytes ? { bytes } : {}),
+      ...(truncated ? { truncated } : {}),
     });
   }
 }
 
-async function readLimited(response: Response, maxBytes: number): Promise<string> {
-  if (!response.body) return "";
+async function readLimited(response: Response, maxBytes: number): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  if (!response.body) return { bytes: new Uint8Array(), truncated: false };
+  let truncated = false;
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -155,10 +168,11 @@ async function readLimited(response: Response, maxBytes: number): Promise<string
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
+      truncated = true;
       await reader.cancel();
       break;
     }
     chunks.push(value);
   }
-  return new TextDecoder().decode(Buffer.concat(chunks));
+  return { bytes: new Uint8Array(Buffer.concat(chunks)), truncated };
 }

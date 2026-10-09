@@ -26,7 +26,7 @@ export function esc(v: unknown): string {
 const STATUS_COLOR: Record<string, string> = { PASS: "#0ca30c", FAIL: "#d03b3b", WARNING: "#c98a00", "NOT EXECUTED": "#8a8f98", "NOT APPLICABLE": "#b5b9c0" };
 const SEVERITY_COLOR: Record<string, string> = { CRITICAL: "#991b1b", HIGH: "#d03b3b", MEDIUM: "#c98a00", LOW: "#2563eb" };
 const fmtDate = (s: string | null) => (s ? new Date(s).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "—");
-const viewportLabel = (v: string | null) => (v ? v.replace(/^(desktop|mobile)-/, (_, k: string) => `${k[0].toUpperCase()}${k.slice(1)} `) : "");
+const viewportLabel = (v: string | null) => (v ? v.replace(/^(desktop|mobile|tablet)-/, (_, k: string) => `${k[0].toUpperCase()}${k.slice(1)} `) : "");
 const pill = (s: string | null, colors = STATUS_COLOR) => (s ? `<span class="pill" style="--c:${colors[s] ?? "#6b7280"}">${esc(s.replace(/_/g, " "))}</span>` : "");
 
 // ---------------------------------------------------------------- charts (inline SVG)

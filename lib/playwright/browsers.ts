@@ -31,7 +31,8 @@ export interface ContextOptions {
 
 /** Creates an isolated context (fresh cookies/storage) with the requested viewport. */
 export async function createContext(browser: Browser, options: ContextOptions): Promise<BrowserContext> {
-  const isMobile = options.viewport.kind === "mobile";
+  // Phones and tablets get touch and mobile emulation.
+  const isMobile = options.viewport.kind !== "desktop";
   return browser.newContext({
     viewport: { width: options.viewport.width, height: options.viewport.height },
     // Firefox does not support isMobile; touch + mobile UA hints are enough for responsive layouts.

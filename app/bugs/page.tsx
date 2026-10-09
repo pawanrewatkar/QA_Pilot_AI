@@ -38,7 +38,7 @@ export default async function BugsPage({ searchParams }: PageProps<"/bugs">) {
     pageId: facets.pages.find((p) => p.id === first(sp.page_id))?.id,
     testType: facets.testTypes.find((t) => t === first(sp.type)),
     browser: facets.browsers.find((b) => b === first(sp.browser)),
-    device: pick(["desktop", "mobile"] as const, first(sp.device)),
+    device: pick(["desktop", "mobile", "tablet"] as const, first(sp.device)),
   };
   const page = readPage(sp.page);
   const [bugs, total, projects, run] = await Promise.all([
@@ -134,6 +134,7 @@ export default async function BugsPage({ searchParams }: PageProps<"/bugs">) {
             <option value="">All</option>
             <option value="desktop">Desktop</option>
             <option value="mobile">Mobile</option>
+            <option value="tablet">Tablet</option>
           </NativeSelect>
         </div>
         <div className="flex items-end gap-2">

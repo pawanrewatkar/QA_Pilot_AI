@@ -17,6 +17,7 @@ import { responsiveModule, uiModule } from "./modules/layout-modules";
 import { performanceModule } from "./modules/performance";
 import { seoModule } from "./modules/seo";
 import { typographyModule } from "./modules/typography";
+import { externalModule } from "@/lib/external-tests/module";
 
 /** Modules with a real implementation in this build, in execution order. */
 export const IMPLEMENTED_MODULES: TestModule[] = [
@@ -51,6 +52,8 @@ export const IMPLEMENTED_MODULES: TestModule[] = [
   ecommerceModule,
   figmaModule,
   performanceModule,
+  // External Test Case Testing: only selected by external executions.
+  externalModule,
 ];
 
 /** Scenario-type modules select cases by scenario across feature modules instead of running on their own. */

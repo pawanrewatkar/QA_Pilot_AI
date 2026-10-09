@@ -3,7 +3,7 @@ import { ResultStatusBadge } from "@/components/shared/status-badges";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EXPECTATION_LABELS, verdictLabel } from "@/lib/constants/expectations";
-import { getTestModule, VIEWPORTS } from "@/lib/constants/testing";
+import { findViewport, getTestModule, VIEWPORT_KIND_LABELS } from "@/lib/constants/testing";
 import { formatDateTime } from "@/lib/utils";
 import type { TestResultRecord } from "@/types";
 
@@ -13,8 +13,8 @@ export function moduleLabel(id: string) {
 }
 
 export function viewportLabel(id: string | null) {
-  const v = VIEWPORTS.find((x) => x.id === id);
-  return v ? `${v.kind === "mobile" ? "Mobile" : "Desktop"} ${v.width}×${v.height}` : (id ?? "—");
+  const v = findViewport(id);
+  return v ? `${VIEWPORT_KIND_LABELS[v.kind]} ${v.width}×${v.height}` : (id ?? "—");
 }
 
 function path(url: string | null) {

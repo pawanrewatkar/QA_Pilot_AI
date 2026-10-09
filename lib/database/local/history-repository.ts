@@ -74,6 +74,7 @@ export class LocalHistoryRepository implements HistoryRepository {
       return {
         id,
         name: str(r.name),
+        runType: String(r.run_type ?? "WEBSITE") as RunHistoryRecord["runType"],
         projectId: String(r.project_id),
         projectName: String(r.project_name),
         website: String(r.website_url),

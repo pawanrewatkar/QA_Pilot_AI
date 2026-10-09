@@ -213,6 +213,82 @@ The **History** page lists every run with its pages, test totals, status counts,
 
 The comparison also lists new bugs, previously existing bugs, and bugs not observed in this run (which stay open). It shows performance changes beyond lab-noise thresholds, and accessibility and UI findings that appeared or disappeared. Findings are compared only where the check ran in both runs.
 
+### External Test Case Testing (`lib/external-tests`)
+
+The **External Test Case Testing** page runs your own test cases, read from an Excel workbook, against a website. It writes the results back to Excel.
+
+**Workflow**
+
+1. Enter the website URL. It is checked for reachability first.
+2. Load the workbook. Three sources are supported:
+   - **Upload**: `.xlsx` / `.xlsm`, up to `MAX_UPLOAD_MB`.
+   - **Local path**: only files inside `EXTERNAL_TEST_CASES_DIR` (default `./data/test-cases`) can be read.
+   - **Google Drive / Google Sheets link**: the file must be shared as "Anyone with the link". No Google API or OAuth is used: the public export URL is fetched, and redirects may only go to Google hosts. Private files report: "Unable to access the Google Drive file…".
+3. Choose the worksheet. The header row is detected, empty rows are ignored, and the original data is never changed.
+4. Check the column mapping. Columns are detected from common header names (TC ID / Test Case ID, Test Case / Scenario / Description, Steps / Steps to Reproduce / Action, Expected / Expected Result / Expected Outcome, URL, Test Data, Preconditions), and every field can be corrected. A Test Case (or Scenario) and an Expected Result are required. Steps are optional.
+5. Preview the cases.
+6. Choose devices: desktop, mobile and tablet profiles. Tablet profiles are 768×1024 and 820×1180.
+7. Choose browsers.
+8. Choose the output: **New Result Sheet** or **Existing Sheet**.
+9. Start. The page shows live progress, results with screenshots, and a download of `QA_External_Test_Result_<website>_<date>.xlsx`.
+
+**How it runs.** Each execution is a normal test run (`run_type = EXTERNAL_TEST_CASE`) of the `external` engine module. It uses the existing browsers, viewports, PageSession safety guard, masked screenshots, results, bug engine, History and comparison. Cases run one after another in every selected browser × device, each starting from a clean session.
+
+**Steps.** Steps are interpreted deterministically: open, click, fill, search, select, hover, scroll, check/uncheck, press key, submit, add to cart and verify. Excel content is data and is never executed.
+
+- **Missing steps** are inferred only for clear cases, such as search, sorting, add to cart, or a link named in the expected result.
+- **Ambiguous steps** are not guessed: they are NOT EXECUTED with the reason.
+- **Collapsed navigation**: when a target is hidden behind a collapsed menu on small screens, the menu is opened first.
+
+**Evaluation.** The expected result is turned into measurable checks and judged against what the browser observed. Exact text matching is not required, so "Login page should open" passes when the browser lands on `/login` with a "Sign in" heading. The checks cover:
+
+- navigation and URL;
+- visible text;
+- validation errors and success messages;
+- element presence;
+- page load;
+- price sorting and cart change;
+- search results;
+- staying on the page;
+- expanded content;
+- downloads.
+
+The statuses are:
+
+- **PASS** needs every check verified.
+- **FAIL** needs a check that clearly failed, with screenshot evidence.
+- **HUMAN INTERACTION** applies when a case needs a person:
+  - an OTP, SMS, CAPTCHA or two-factor step;
+  - a payment or order;
+  - a real inbox, physical device or third-party login;
+  - real credentials;
+  - a visual or business judgement;
+  - an expectation that cannot be measured.
+
+  The Actual Result starts with "This test case needs human interaction." and both the Actual Result and Status cells are yellow.
+- **NOT EXECUTED** applies when a step cannot be performed reliably or safely, when there is no Test Email, or when a real submission would be needed while submissions are disabled.
+- **NOT APPLICABLE** applies when a case targets another device type.
+
+With several browsers or devices, the Excel status is the weakest one: FAIL, then HUMAN INTERACTION, NOT EXECUTED, PASS, NOT APPLICABLE. The Actual Result lists each device.
+
+**Safety.** The existing rules apply:
+
+- Non-GET requests are intercepted unless **Allow real form submissions** is enabled. Even then, each form is submitted at most once.
+- Email fields only ever receive the project's Test Email.
+- Cart actions are allowed. Payments, orders and destructive actions are never performed.
+- Field values are not logged.
+
+**Results never overwrite earlier ones.** Result columns are checked by content, not just by header.
+
+- An empty "Actual Result / Status / Date" set is reused.
+- A set containing any data (even partly) is kept, and "Actual Result 2 / Status 2 / Date 2" is added, then 3, and so on.
+- Columns mapped as test-case inputs are never used for results.
+- **Existing Sheet** adds the columns to the selected sheet. **New Result Sheet** copies all original columns into a new sheet, so the original sheet is untouched.
+- Column widths, styles, merged cells, filters and frozen panes are kept.
+- The uploaded file itself is never modified. The output is a new file.
+
+**Bugs.** A FAIL with evidence goes through the existing bug engine. The bug is titled "External Test Case: <TC ID>: …" and includes the expected and actual results and the screenshot.
+
 ## Safety
 
 - **Form submissions are intercepted by default.** Validation tests run in a guarded browser mode that aborts every non-GET request and every page navigation, so nothing reaches the website. The integration tests assert that the fixture server receives zero writes.
@@ -279,7 +355,8 @@ All variables are optional; the defaults run everything locally. Copy `.env.exam
 | `DATABASE_PROVIDER` | `local` | `local` (SQLite). `supabase` is reserved for a future provider and is rejected today. |
 | `DATABASE_PATH` | `./data/qa-pilot.db` | SQLite file. |
 | `STORAGE_PROVIDER` / `STORAGE_PATH` | `local` / `./data/storage` | Uploaded documents, screenshots and generated reports. |
-| `MAX_UPLOAD_MB` | `10` | Reference-document upload limit. |
+| `MAX_UPLOAD_MB` | `10` | Upload limit for reference documents and test-case workbooks. |
+| `EXTERNAL_TEST_CASES_DIR` | `./data/test-cases` | Folder from which External Test Case Testing may read workbooks by local path; paths outside it are refused. |
 | `AI_PROVIDER` | `local` | Deterministic local analysis. No external AI is called. |
 | `ANTHROPIC_API_KEY`, `FIGMA_ACCESS_TOKEN`, `PAGESPEED_API_KEY`, `SMTP_URL`, `SUPABASE_*` | — | Reserved for future providers. Setting them changes nothing today, and **Settings** shows only whether one is present, never its value. |
 
@@ -348,6 +425,7 @@ Each integration sits behind an interface, so it can be added or replaced withou
 | Google PageSpeed | `PerformanceProvider` (`lib/performance/provider.ts`) | Local Lighthouse, with browser timing as fallback |
 | Email | `EmailProvider` (`lib/email/provider.ts`) | Local outbox; nothing is sent |
 | Cloud storage | `StorageProvider` (`lib/storage/provider.ts`) | Local filesystem |
+| Google Drive (private files) | `ExternalTestCaseSourceProvider` (`lib/external-tests/sources.ts`): `GoogleDriveTestCaseProvider` placeholder | Shared links only (no OAuth) |
 | AI duplicate detection | `DuplicateDetector` (`lib/bugs/duplicates.ts`) | Deterministic fingerprint |
 
 **AI rule.** The application works without AI.
@@ -369,4 +447,10 @@ Each integration sits behind an interface, so it can be added or replaced withou
 - Reports embed at most 60 screenshots (failures first). The PDF caps test cases at 1,500 rows and detail tables at 400 rows, and says so; the Excel and HTML reports include up to 5,000 rows per detail table.
 - PDF generation needs the Playwright Chromium browser on the worker machine. Without it, the PDF is marked FAILED and the other three files are still produced.
 - No authentication or multi-user support. One worker processes jobs one at a time, and a report is generated after the run that requested it.
+- **External Test Case Testing** is limited to what can be interpreted deterministically.
+  - Unusual phrasings, custom widgets without accessible names, and multi-page journeys that the steps don't spell out end up as NOT EXECUTED or HUMAN INTERACTION rather than being guessed.
+  - Links that open a new tab are not followed.
+  - `.xls` and `.csv` workbooks must be saved as `.xlsx`.
+  - Up to 2,000 test cases are read per sheet.
+  - Excel charts and images are not guaranteed to survive in the result file.
 - Single worker, sequential execution. The crawler always uses Chromium; tests use whichever browsers you select.

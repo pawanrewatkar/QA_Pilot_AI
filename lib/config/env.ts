@@ -11,6 +11,8 @@ const envSchema = z.object({
   STORAGE_PROVIDER: z.enum(["local"]).default("local"),
   STORAGE_PATH: z.string().min(1).default("./data/storage"),
   MAX_UPLOAD_MB: z.coerce.number().positive().max(100).default(10),
+  /** Folder from which External Test Case Testing may read workbooks by local path. Paths outside it are refused. */
+  EXTERNAL_TEST_CASES_DIR: z.string().min(1).default("./data/test-cases"),
   AI_PROVIDER: z.enum(["local", "anthropic"]).default("local"),
   ANTHROPIC_API_KEY: z.string().optional(),
   SUPABASE_URL: z.string().optional(),

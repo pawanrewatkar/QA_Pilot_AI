@@ -28,7 +28,7 @@ export function sanitizeFileName(fileName: string): string {
   return (cleaned || "document").slice(0, 200);
 }
 
-function matchesSignature(bytes: Uint8Array, signature: "pdf" | "zip" | "ole"): boolean {
+export function matchesSignature(bytes: Uint8Array, signature: "pdf" | "zip" | "ole"): boolean {
   const starts = (sig: number[]) => sig.every((b, i) => bytes[i] === b);
   switch (signature) {
     case "pdf":

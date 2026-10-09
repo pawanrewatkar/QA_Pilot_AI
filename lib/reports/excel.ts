@@ -7,13 +7,15 @@ import { deviceOf } from "./data";
  * "No data recorded" row instead of invented values.
  */
 
-const HEADER_FILL = "FF1F2937";
-const STATUS_FILL: Record<string, string> = {
+export const HEADER_FILL = "FF1F2937";
+export const STATUS_FILL: Record<string, string> = {
   PASS: "FFDCFCE7",
   FAIL: "FFFEE2E2",
   WARNING: "FFFEF3C7",
   "NOT EXECUTED": "FFF3F4F6",
   "NOT APPLICABLE": "FFF3F4F6",
+  // External Test Case Testing: cases that need a person are highlighted yellow.
+  "HUMAN INTERACTION": "FFFFF59D",
   CRITICAL: "FFFECACA",
   HIGH: "FFFED7AA",
   MEDIUM: "FFFEF3C7",
@@ -67,7 +69,7 @@ function addTable(wb: ExcelJS.Workbook, name: string, columns: Column[], rows: R
 /** Excel cells hold at most 32,767 characters. */
 const truncateCell = (v: string | number) => (typeof v === "string" && v.length > 32000 ? `${v.slice(0, 32000)}… [truncated]` : v);
 
-const viewportLabel = (v: string | null) => (v ? v.replace(/^(desktop|mobile)-/, (_, k: string) => `${k[0].toUpperCase()}${k.slice(1)} `) : "");
+const viewportLabel = (v: string | null) => (v ? v.replace(/^(desktop|mobile|tablet)-/, (_, k: string) => `${k[0].toUpperCase()}${k.slice(1)} `) : "");
 
 function resultRow(r: ReportResult): Record<string, Cell> {
   return {

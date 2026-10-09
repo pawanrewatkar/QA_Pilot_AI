@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CrawledPage, CrawlProgress } from "@/lib/crawler/crawler";
 import { DETAIL_COLUMNS, type DetailRow } from "@/lib/testing/details";
 import type { FinalizedOutcome } from "@/lib/testing/outcome";
+import type { ExternalObservationInput, StoredExternalCase } from "@/lib/external-tests/module";
 import type { BrowserName, CrawlConfig, TestRunOptions, TestRunStatus } from "@/types";
 import type { SqliteDatabase } from "./sqlite-client";
 
@@ -24,6 +25,7 @@ export interface RunForExecution {
   options: TestRunOptions;
   project: { name: string; websiteUrl: string; testEmail: string | null; figmaUrl: string | null };
   pages: { id: string; url: string }[];
+  runType: "WEBSITE" | "EXTERNAL_TEST_CASE";
 }
 
 /**
@@ -128,7 +130,36 @@ export class SqliteEngineStore {
       options: JSON.parse(String(row.options)) as TestRunOptions,
       project: { name: String(row.project_name), websiteUrl: String(row.website_url), testEmail: row.test_email === null ? null : String(row.test_email), figmaUrl: row.figma_url === null ? null : String(row.figma_url) },
       pages,
+      runType: String(row.run_type ?? "WEBSITE") as RunForExecution["runType"],
     };
+  }
+
+  // ---------------------------------------------------------------- external test cases
+
+  getExternalCases(runId: string): StoredExternalCase[] {
+    return (this.db.prepare("SELECT * FROM external_test_cases WHERE test_run_id = ? ORDER BY row_number").all(runId) as Row[]).map((r) => ({
+      id: String(r.id),
+      rowNumber: Number(r.row_number),
+      caseRef: r.case_ref === null ? null : String(r.case_ref),
+      title: String(r.title),
+      steps: r.steps === null ? null : String(r.steps),
+      expected: r.expected === null ? null : String(r.expected),
+      url: r.url === null ? null : String(r.url),
+      testData: r.test_data === null ? null : String(r.test_data),
+      preconditions: r.preconditions === null ? null : String(r.preconditions),
+    }));
+  }
+
+  /** One case in one browser × viewport; a retry of the same combination replaces the earlier observation. */
+  saveExternalObservation(runId: string, o: ExternalObservationInput) {
+    this.db
+      .prepare(
+        `INSERT INTO external_test_observations (id, external_case_id, test_run_id, browser, viewport, status, actual_result, screenshot_key, duration_ms, observed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (external_case_id, browser, viewport) DO UPDATE SET status = excluded.status, actual_result = excluded.actual_result,
+           screenshot_key = excluded.screenshot_key, duration_ms = excluded.duration_ms, observed_at = excluded.observed_at`,
+      )
+      .run(randomUUID(), o.caseId, runId, o.browser, o.viewport, o.status, o.actual.slice(0, 20_000), o.screenshotKey, o.durationMs, now());
   }
 
   markRunRunning(runId: string, total: number) {

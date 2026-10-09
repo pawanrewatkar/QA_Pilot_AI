@@ -280,9 +280,9 @@ export function createRunAndEnqueue(db: SqliteDatabase, input: NewTestRun): stri
   };
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO test_runs (id, project_id, configuration_id, status, config_snapshot, name, options, progress_total, created_at, updated_at)
-       VALUES (?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)`,
-    ).run(id, input.projectId, input.configurationId, JSON.stringify(snapshot), input.name, JSON.stringify(input.options), input.pageIds.length * input.browsers.length * input.viewports.length, ts, ts);
+      `INSERT INTO test_runs (id, project_id, configuration_id, status, config_snapshot, name, options, progress_total, created_at, updated_at, run_type)
+       VALUES (?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, input.projectId, input.configurationId, JSON.stringify(snapshot), input.name, JSON.stringify(input.options), input.pageIds.length * input.browsers.length * input.viewports.length, ts, ts, input.runType ?? "WEBSITE");
     enqueueJob(db, "run.execute", { testRunId: id });
   })();
   return id;

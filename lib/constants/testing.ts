@@ -91,8 +91,16 @@ export const TEST_MODULE_GROUPS: TestModuleGroup[] = [
 export const ALL_TEST_MODULES: TestModuleDefinition[] = TEST_MODULE_GROUPS.flatMap((g) => g.modules);
 export const ALL_TEST_MODULE_IDS: string[] = ALL_TEST_MODULES.map((m) => m.id);
 
+/**
+ * Modules the engine runs that are not offered in website test runs (they have their own workflow).
+ * Listed so labels resolve everywhere (results, bugs, reports).
+ */
+export const INTERNAL_TEST_MODULES: TestModuleDefinition[] = [
+  { id: "external", label: "External Test Case Testing", description: "Test cases from an Excel workbook, executed against the website." },
+];
+
 export function getTestModule(id: string): TestModuleDefinition | undefined {
-  return ALL_TEST_MODULES.find((m) => m.id === id);
+  return ALL_TEST_MODULES.find((m) => m.id === id) ?? INTERNAL_TEST_MODULES.find((m) => m.id === id);
 }
 
 export const MODULE_REQUIREMENT_LABELS: Record<ModuleRequirement, string> = {
@@ -124,6 +132,24 @@ export const VIEWPORTS: Viewport[] = [
 ];
 export const VIEWPORT_IDS = VIEWPORTS.map((v) => v.id);
 
+/**
+ * Tablet profiles, used by External Test Case Testing. Kept out of VIEWPORTS so website runs and the
+ * responsive sweep (which iterates VIEWPORTS) behave exactly as before.
+ */
+export const TABLET_VIEWPORTS: Viewport[] = [
+  { id: "tablet-768x1024", kind: "tablet", width: 768, height: 1024 },
+  { id: "tablet-820x1180", kind: "tablet", width: 820, height: 1180 },
+];
+
+/** Every known viewport profile (desktop, mobile, tablet). */
+export const ALL_VIEWPORTS: Viewport[] = [...VIEWPORTS, ...TABLET_VIEWPORTS];
+
+export function findViewport(id: string | null | undefined): Viewport | undefined {
+  return ALL_VIEWPORTS.find((v) => v.id === id);
+}
+
+export const VIEWPORT_KIND_LABELS: Record<Viewport["kind"], string> = { desktop: "Desktop", mobile: "Mobile", tablet: "Tablet" };
+
 export const REPORT_FORMAT_OPTIONS: { id: ReportFormat; label: string; description: string }[] = [
   { id: "EXCEL", label: "Excel workbooks", description: "Testing report and bug report (.xlsx)." },
   { id: "PDF", label: "PDF report", description: "Branded, printable report rendered locally." },
@@ -150,6 +176,8 @@ export const IMPLEMENTED_MODULE_IDS: readonly string[] = [
   "ui", "typography", "accessibility", "seo", "content", "responsive", "ecommerce", "figma", "performance",
   // Scenario modules select positive/negative/edge/boundary cases across the feature modules above.
   "positive", "negative", "edge", "boundary",
+  // External Test Case Testing (not selectable in website runs; see INTERNAL_TEST_MODULES).
+  "external",
 ];
 
 /** Hard cap on manual URLs per configuration to keep runs bounded. */

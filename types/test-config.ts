@@ -6,7 +6,7 @@ export type TestScope = (typeof TEST_SCOPES)[number];
 export const BROWSERS = ["chromium", "firefox", "webkit"] as const;
 export type BrowserName = (typeof BROWSERS)[number];
 
-export type ViewportKind = "desktop" | "mobile";
+export type ViewportKind = "desktop" | "mobile" | "tablet";
 
 export interface Viewport {
   id: string;
