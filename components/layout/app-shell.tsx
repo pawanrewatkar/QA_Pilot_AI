@@ -1,11 +1,15 @@
 import Link from "next/link";
 import * as React from "react";
+import { SignOutButton } from "@/components/auth/sign-out-button";
+import { authProvider } from "@/lib/auth/identity";
 import { APP_NAME, COPYRIGHT_NOTICE } from "@/lib/constants/brand";
 import { Brand, BrandMark } from "./brand";
 import { MobileNav } from "./mobile-nav";
 import { SidebarNav } from "./sidebar-nav";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  // Server-only env read; the allow-list and keys are never passed to the client.
+  const accounts = authProvider() === "supabase";
   return (
     <div className="flex min-h-dvh">
       <a
@@ -22,7 +26,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Brand />
           </div>
           <SidebarNav />
-          <div className="border-t border-white/10 px-4 py-3 text-[11px] text-sidebar-muted">Local mode · no external services</div>
+          {accounts ? (
+            <div className="border-t border-white/10 px-2 py-2 text-sidebar-muted">
+              <SignOutButton className="hover:text-sidebar-foreground" />
+            </div>
+          ) : (
+            <div className="border-t border-white/10 px-4 py-3 text-[11px] text-sidebar-muted">Local mode · no external services</div>
+          )}
         </div>
       </aside>
 
@@ -33,6 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <BrandMark className="size-6" />
             {APP_NAME}
           </Link>
+          {accounts ? <SignOutButton className="ml-auto text-muted-foreground hover:text-foreground" /> : null}
         </header>
 
         <main id="main" className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">

@@ -4,7 +4,7 @@ import { assertValidStorageKey } from "@/lib/storage/provider";
 
 /** Serves screenshot evidence. Only keys recorded by a test run can be read. */
 export async function GET(request: Request) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const key = new URL(request.url).searchParams.get("key") ?? "";
   try {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { isEmailAllowed, normalizeEmail, parseAllowList } from "@/lib/auth/allow-list";
 import { LOCAL_OWNER_ID } from "@/lib/auth/identity-constants";
-import { resolveIdentity } from "@/lib/auth/identity";
+import { resolveIdentityConfig as resolveIdentity } from "@/lib/auth/identity";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import { DEFAULT_CRAWL_CONFIG } from "@/lib/constants/crawl";
 import { DEFAULT_REPORT_SECTIONS } from "@/lib/constants/testing";
@@ -216,17 +216,17 @@ describe("owner-scoped data access", () => {
 
 describe("trusted identity", () => {
   it("defaults to the local operator in development and test", () => {
-    expect(resolveIdentity({ NODE_ENV: "development" })).toEqual({ ok: true, identity: { ownerId: LOCAL_OWNER_ID, source: "local" } });
+    expect(resolveIdentity({ NODE_ENV: "development" })).toEqual({ ok: true, mode: "local", identity: { ownerId: LOCAL_OWNER_ID, source: "local" } });
     expect(resolveIdentity({ NODE_ENV: "test", AUTH_PROVIDER: "local" })).toMatchObject({ ok: true });
   });
 
-  it("fails closed for production builds, Vercel, Supabase (not implemented yet) and invalid configuration", () => {
+  it("fails closed for production builds, Vercel, unconfigured Supabase and invalid configuration", () => {
     expect(resolveIdentity({ NODE_ENV: "production" })).toEqual({ ok: false, reason: "LOCAL_MODE_NOT_ALLOWED" });
     for (const flag of ["1", "TRUE", "yes", " true"]) expect(resolveIdentity({ NODE_ENV: "production", QA_PILOT_LOCAL_MODE: flag })).toMatchObject({ ok: false });
     expect(resolveIdentity({ NODE_ENV: "production", QA_PILOT_LOCAL_MODE: "true" })).toMatchObject({ ok: true });
     expect(resolveIdentity({ NODE_ENV: "development", VERCEL: "1" })).toEqual({ ok: false, reason: "LOCAL_MODE_NOT_ALLOWED" });
     expect(resolveIdentity({ NODE_ENV: "production", VERCEL: "1", QA_PILOT_LOCAL_MODE: "true" })).toEqual({ ok: false, reason: "LOCAL_MODE_NOT_ALLOWED" });
-    expect(resolveIdentity({ AUTH_PROVIDER: "supabase", NODE_ENV: "development" })).toEqual({ ok: false, reason: "AUTH_NOT_IMPLEMENTED" });
+    expect(resolveIdentity({ AUTH_PROVIDER: "supabase", NODE_ENV: "development" })).toEqual({ ok: false, reason: "SUPABASE_NOT_CONFIGURED" });
     for (const value of ["admin", "none", "LOCAL", "supabase-dev"]) expect(resolveIdentity({ AUTH_PROVIDER: value })).toMatchObject({ ok: false });
   });
 });
@@ -265,7 +265,7 @@ describe("route handlers and server actions", () => {
   };
 
   it("returns 401 from every API route when there is no identity", async () => {
-    process.env.AUTH_PROVIDER = "supabase";
+    process.env.AUTH_PROVIDER = "supabase"; // without Supabase settings: fails closed, never local
     try {
       for (const [name, res] of await routes()) expect((await res).status, name).toBe(401);
       const workers = (await import("@/app/api/workers/route")).GET;
@@ -283,9 +283,9 @@ describe("route handlers and server actions", () => {
     process.env.AUTH_PROVIDER = "supabase";
     try {
       const { actionDb, actionIdentity, routeDb } = await import("@/lib/server/db");
-      expect(() => actionDb()).toThrow(/NEXT_REDIRECT/);
-      expect(() => actionIdentity()).toThrow(/NEXT_REDIRECT/);
-      expect(routeDb().denied?.status).toBe(401);
+      await expect(actionDb()).rejects.toThrow(/NEXT_REDIRECT/);
+      await expect(actionIdentity()).rejects.toThrow(/NEXT_REDIRECT/);
+      expect((await routeDb()).denied?.status).toBe(401);
     } finally {
       delete process.env.AUTH_PROVIDER;
     }
@@ -302,11 +302,39 @@ describe("route handlers and server actions", () => {
     };
     walk(path.resolve("app"));
     walk(path.resolve("components"));
+    // Auth endpoints (sign-in, confirmation) only talk to Supabase Auth and must never open the database.
+    const authOnly = (f: string) => f.startsWith(path.resolve("app", "auth") + path.sep);
     for (const f of files) {
       const src = fs.readFileSync(f, "utf8");
+      if (authOnly(f)) {
+        expect(src, `${f} must not open the database`).not.toMatch(/@\/lib\/server\/db|@\/lib\/database/);
+        continue;
+      }
       expect(src, `${f} must not use the unscoped provider`).not.toMatch(/getDatabase\(|from "@\/lib\/database"/);
-      if (f.endsWith(`${path.sep}route.ts`)) expect(src, `${f} must check access`).toMatch(/const access = routeDb\(\);\s+if \(access\.denied\) return access\.denied;/);
-      if (/^"use server";/.test(src)) expect(src, `${f} must use actionDb`).toMatch(/actionDb\(\)/);
+      if (f.endsWith(`${path.sep}route.ts`)) expect(src, `${f} must check access`).toMatch(/const access = await routeDb\(\);\s+if \(access\.denied\) return access\.denied;/);
+      if (/^"use server";/.test(src)) expect(src, `${f} must use actionDb`).toMatch(/await actionDb\(\)/);
+    }
+  });
+
+  it("every page checks the identity at request time, except the listed public pages", () => {
+    // Public: sign-in pages decide via authPageMode(); /auth-required explains a missing identity; /copyright is static text.
+    const publicPages = ["copyright", "auth-required", "login", "signup", "forgot-password", path.join("auth", "update-password")].map((p) => path.resolve("app", p, "page.tsx"));
+    const pages: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name === "page.tsx") pages.push(p);
+      }
+    };
+    walk(path.resolve("app"));
+    for (const f of pages) {
+      const src = fs.readFileSync(f, "utf8");
+      if (publicPages.includes(f)) {
+        expect(src, `${f} must not open the database`).not.toMatch(/@\/lib\/server\/db|@\/lib\/database/);
+        continue;
+      }
+      expect(src, `${f} must call requestDb()`).toMatch(/await requestDb\(\)/);
     }
   });
 });

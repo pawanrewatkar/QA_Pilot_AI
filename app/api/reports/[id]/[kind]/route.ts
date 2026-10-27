@@ -7,7 +7,7 @@ import { getStorage } from "@/lib/storage";
  * the browser. HTML is served with a sandbox CSP so the report cannot act on this app's origin.
  */
 export async function GET(request: Request, ctx: RouteContext<"/api/reports/[id]/[kind]">) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const { id, kind } = await ctx.params;
   if (!Object.hasOwn(REPORT_CONTENT_TYPES, kind)) return new Response("Unknown report type", { status: 404 });

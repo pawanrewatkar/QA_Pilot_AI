@@ -352,15 +352,21 @@ All variables are optional; the defaults run everything locally. Copy `.env.exam
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `AUTH_PROVIDER` | `local` | `local`: single local operator, no sign-in (development; refused on Vercel). `supabase`: Supabase Auth email/password sign-in (see [Security](#security)). Any other value fails closed. |
+| `QA_PILOT_LOCAL_MODE` | — | Must be exactly `true` to allow local mode in a production build (`npm start`). |
+| `NEXT_PUBLIC_SUPABASE_URL` | — | Supabase project URL (https). Only read when `AUTH_PROVIDER=supabase`. |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | — | Supabase publishable key (`NEXT_PUBLIC_SUPABASE_ANON_KEY`, the legacy anon key, is used if this is unset). Public by design. A secret key (`sb_secret_…`) is rejected. |
+| `NEXT_PUBLIC_SITE_URL` | — | Public origin of this app, used for email links and redirects (never the request's Host header). |
+| `AUTH_ALLOWED_EMAILS` | — | Server-only. Comma-separated emails and/or `@domain` entries allowed to register and sign in. Empty or missing means nobody can. |
 | `DATABASE_PROVIDER` | `local` | `local` (SQLite). `supabase` is reserved for a future provider and is rejected today. |
 | `DATABASE_PATH` | `./data/qa-pilot.db` | SQLite file. |
 | `STORAGE_PROVIDER` / `STORAGE_PATH` | `local` / `./data/storage` | Uploaded documents, screenshots and generated reports. |
 | `MAX_UPLOAD_MB` | `10` | Upload limit for reference documents and test-case workbooks. |
 | `EXTERNAL_TEST_CASES_DIR` | `./data/test-cases` | Folder from which External Test Case Testing may read workbooks by local path; paths outside it are refused. |
 | `AI_PROVIDER` | `local` | Deterministic local analysis. No external AI is called. |
-| `ANTHROPIC_API_KEY`, `FIGMA_ACCESS_TOKEN`, `PAGESPEED_API_KEY`, `SMTP_URL`, `SUPABASE_*` | — | Reserved for future providers. Setting them changes nothing today, and **Settings** shows only whether one is present, never its value. |
+| `ANTHROPIC_API_KEY`, `FIGMA_ACCESS_TOKEN`, `PAGESPEED_API_KEY`, `SMTP_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | — | Reserved for future providers (authentication does not use a service-role key). Setting them changes nothing today, and **Settings** shows only whether one is present, never its value. |
 
-Environment variables are read only on the server (`lib/config/env.ts`, validated with zod). None use the `NEXT_PUBLIC_` prefix, so none reach the browser bundle.
+Environment variables are read only on the server (`lib/config/env.ts`, validated with zod). The only `NEXT_PUBLIC_` variables are the Supabase project URL, the publishable key and the site URL, which are public by design. No secret, and not the allow-list, uses that prefix.
 
 ## Security
 
@@ -387,13 +393,18 @@ Environment variables are read only on the server (`lib/config/env.ts`, validate
   - The standalone HTML report is served with a sandboxing Content-Security-Policy.
 - **HTTP headers.** `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `Permissions-Policy` are set for every response.
 - **Testing safety.** See [Safety](#safety). There is no brute force, credential stuffing, exploitation, payment or spam behaviour.
-- **Ownership and authorization (no sign-in yet).** Every project has an owner (`projects.owner_id`, migration 7), and all other data is reached through its project.
+- **Ownership and authorization.** Every project has an owner (`projects.owner_id`, migration 7), and all other data is reached through its project.
   - **Scoped data access.** Pages, server actions and API routes get their data only through an owner-scoped provider (`lib/database/owner-scoped-provider.ts`, via `lib/server/db.ts`). Lists are filtered to the owner. Anything not owned is "not found" (404).
-  - **Unauthenticated requests.** API requests without an identity get `401`, and pages and actions redirect to `/auth-required`.
+  - **Unauthenticated requests.** API requests without an identity get `401`. Pages and actions redirect to `/login` (Supabase mode) or `/auth-required`.
   - **Identity.** The identity comes only from server configuration (`lib/auth/identity.ts`).
     - `AUTH_PROVIDER=local` (default) is the single local operator. It is refused on Vercel, and a production build (`npm start`) also needs `QA_PILOT_LOCAL_MODE=true`.
-    - `AUTH_PROVIDER=supabase` is reserved for Supabase Auth, which is **not implemented yet**: every request is treated as signed out.
-  - **Until sign-in exists**, run the app only on a trusted machine.
+    - `AUTH_PROVIDER=supabase` uses Supabase Auth (see below). If its settings are missing or invalid, access is refused; it never falls back to local mode.
+- **Sign-in (Supabase Auth, `AUTH_PROVIDER=supabase`).** Email and password, with `/login`, `/signup`, `/forgot-password`, `/auth/update-password` and the email-link callback `/auth/confirm`.
+  - **Who may use it.** On every request the session is verified with the Supabase Auth server (`auth.getUser()`), and the user must have a confirmed email that is *currently* in `AUTH_ALLOWED_EMAILS`. The owner id is the Supabase user id; nothing the browser sends can choose it. Removing an address from the list locks that user out on the next request.
+  - **Registration.** Allowed only for allow-listed addresses, checked on the server before Supabase is contacted. Messages are the same for every address, so neither accounts nor the allow-list can be discovered.
+  - **Sessions.** Held only in httpOnly, `SameSite=Lax` cookies (`Secure` on https); there is no browser Supabase client. `proxy.ts` refreshes them and sends signed-out page requests to `/login`. That redirect is only a convenience; authorization happens next to the data.
+  - **Redirects.** `next` parameters must be same-origin paths (`lib/auth/redirect.ts`). Email links are built from `NEXT_PUBLIC_SITE_URL` and never carry tokens onward.
+  - **Not covered.** Rate limiting, CAPTCHA and the password policy are Supabase's (configure them in the dashboard). Anyone holding the publishable key can call Supabase's sign-up API directly. Such accounts can never use this app unless they are allow-listed, but to stop them from being created at all, disable sign-ups in Supabase or add a "before user created" hook.
 
 ## Vercel architecture
 
@@ -452,7 +463,7 @@ Each integration sits behind an interface, so it can be added or replaced withou
 - Each module tests up to 5 items of a kind per page, 3 forms per page, and a configurable number of links per page (default 100), to keep runs bounded. Real sites with many modules and browsers can take several minutes per page.
 - Reports embed at most 60 screenshots (failures first). The PDF caps test cases at 1,500 rows and detail tables at 400 rows, and says so; the Excel and HTML reports include up to 5,000 rows per detail table.
 - PDF generation needs the Playwright Chromium browser on the worker machine. Without it, the PDF is marked FAILED and the other three files are still produced.
-- No authentication or multi-user support. One worker processes jobs one at a time, and a report is generated after the run that requested it.
+- Sign-in (Supabase Auth) is available, but data stays in local SQLite, so the web app and the worker must share one machine. There are no teams or shared projects: each user sees only their own data. One worker processes jobs one at a time, and a report is generated after the run that requested it.
 - **External Test Case Testing** is limited to what can be interpreted deterministically.
   - Unusual phrasings, custom widgets without accessible names, and multi-page journeys that the steps don't spell out end up as NOT EXECUTED or HUMAN INTERACTION rather than being guessed.
   - Links that open a new tab are not followed.

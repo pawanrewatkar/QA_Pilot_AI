@@ -3,7 +3,7 @@ import { routeDb } from "@/lib/server/db";
 
 export async function GET() {
   await connection();
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   return Response.json(await access.db.workers.status(), { headers: { "Cache-Control": "no-store" } });
 }

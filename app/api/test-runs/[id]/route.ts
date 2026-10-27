@@ -2,7 +2,7 @@ import { routeDb } from "@/lib/server/db";
 
 /** Polled by the live test-run progress panel. */
 export async function GET(_request: Request, ctx: RouteContext<"/api/test-runs/[id]">) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const { id } = await ctx.params;
   const run = await access.db.testRuns.getDetail(id);

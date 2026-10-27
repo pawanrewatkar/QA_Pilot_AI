@@ -7,3 +7,6 @@ coverage
 test-results
 playwright-report
 *.tsbuildinfo
+# Private deployment notes may contain credentials; never copy them into an image.
+project-memory/Deployment.md
+**/Deployment.md

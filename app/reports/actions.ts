@@ -11,7 +11,7 @@ import { getStorage } from "@/lib/storage";
 export async function generateReportAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("testRunId") ?? "");
   if (!runId) return;
-  const db = actionDb();
+  const db = await actionDb();
   let requested = false;
   try {
     const bundle = await db.reports.requestBundle(runId);
@@ -28,7 +28,7 @@ export async function generateReportAction(formData: FormData): Promise<void> {
 export async function deleteReportAction(formData: FormData): Promise<void> {
   const id = String(formData.get("bundleId") ?? "");
   if (!id) return;
-  const db = actionDb();
+  const db = await actionDb();
   const bundle = await db.reports.getBundle(id);
   if (!bundle) return;
   await db.reports.deleteBundle(id);

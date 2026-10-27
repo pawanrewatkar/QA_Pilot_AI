@@ -16,7 +16,7 @@ export async function startCrawlAction(projectId: string, _prev: CrawlFormState,
   const raw = Object.fromEntries(
     ["maxDepth", "maxPages", "timeoutSeconds", "retries", "exclusions", "includeSubdomains", "respectRobotsTxt", "useSitemap", "queryParams"].map((k) => [k, formData.get(k)]),
   );
-  const result = await startCrawl(actionDb(), projectId, raw);
+  const result = await startCrawl(await actionDb(), projectId, raw);
   if (!result.ok) return { errors: result.errors, startedId: null };
   revalidatePath(`/projects/${projectId}/pages`);
   return { errors: {}, startedId: result.crawl.id };
@@ -25,13 +25,13 @@ export async function startCrawlAction(projectId: string, _prev: CrawlFormState,
 export async function cancelCrawlAction(formData: FormData): Promise<void> {
   const id = String(formData.get("crawlRunId") ?? "");
   const projectId = String(formData.get("projectId") ?? "");
-  if (id) await actionDb().crawlRuns.requestCancel(id);
+  if (id) await (await actionDb()).crawlRuns.requestCancel(id);
   revalidatePath(`/projects/${projectId}/pages`);
 }
 
 export async function setPagesSelectedAction(projectId: string, ids: string[], selected: boolean): Promise<{ changed: number }> {
   const safeIds = ids.filter((id) => typeof id === "string").slice(0, 5000);
-  const changed = await actionDb().pages.setSelected(projectId, safeIds, selected);
+  const changed = await (await actionDb()).pages.setSelected(projectId, safeIds, selected);
   revalidatePath(`/projects/${projectId}/pages`);
   return { changed };
 }
@@ -42,7 +42,7 @@ export interface ManualUrlState {
 }
 
 export async function addManualUrlsAction(projectId: string, _prev: ManualUrlState, formData: FormData): Promise<ManualUrlState> {
-  const result = await addManualPages(actionDb(), projectId, String(formData.get("urls") ?? ""));
+  const result = await addManualPages(await actionDb(), projectId, String(formData.get("urls") ?? ""));
   if (!result.ok) return { error: result.error, message: null };
   revalidatePath(`/projects/${projectId}/pages`);
   revalidatePath("/pages");
