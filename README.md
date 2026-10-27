@@ -387,7 +387,13 @@ Environment variables are read only on the server (`lib/config/env.ts`, validate
   - The standalone HTML report is served with a sandboxing Content-Security-Policy.
 - **HTTP headers.** `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `Permissions-Policy` are set for every response.
 - **Testing safety.** See [Safety](#safety). There is no brute force, credential stuffing, exploitation, payment or spam behaviour.
-- **No authentication yet.** Run the app only on a trusted machine or network. Before sharing a deployment, add authentication: the server actions are marked where the checks belong.
+- **Ownership and authorization (no sign-in yet).** Every project has an owner (`projects.owner_id`, migration 7), and all other data is reached through its project.
+  - **Scoped data access.** Pages, server actions and API routes get their data only through an owner-scoped provider (`lib/database/owner-scoped-provider.ts`, via `lib/server/db.ts`). Lists are filtered to the owner. Anything not owned is "not found" (404).
+  - **Unauthenticated requests.** API requests without an identity get `401`, and pages and actions redirect to `/auth-required`.
+  - **Identity.** The identity comes only from server configuration (`lib/auth/identity.ts`).
+    - `AUTH_PROVIDER=local` (default) is the single local operator. It is refused on Vercel, and a production build (`npm start`) also needs `QA_PILOT_LOCAL_MODE=true`.
+    - `AUTH_PROVIDER=supabase` is reserved for Supabase Auth, which is **not implemented yet**: every request is treated as signed out.
+  - **Until sign-in exists**, run the app only on a trusted machine.
 
 ## Vercel architecture
 

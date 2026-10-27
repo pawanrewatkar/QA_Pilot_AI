@@ -37,6 +37,10 @@ export class LocalHistoryRepository implements HistoryRepository {
       where.push("r.project_id = ?");
       params.push(q.projectId);
     }
+    if (q.ownerId !== undefined) {
+      where.push("p.owner_id = ?");
+      params.push(q.ownerId);
+    }
     if (q.status) {
       where.push("r.status = ?");
       params.push(q.status);

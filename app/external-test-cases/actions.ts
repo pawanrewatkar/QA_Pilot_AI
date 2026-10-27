@@ -3,16 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { readEnv, resolveFromRoot } from "@/lib/config/env";
-import { getDatabase } from "@/lib/database";
+import { actionDb, actionIdentity } from "@/lib/server/db";
 import type { ColumnMapping, OutputMode, SourceKind } from "@/lib/external-tests/types";
 import { inspectDraftSheet, inspectSource, startExternalExecution, type DraftInspection, type ExternalTestDeps, type Result, type SheetInspection, type SourceInput } from "@/lib/services/external-tests";
 import { getStorage } from "@/lib/storage";
 
-// No authentication in this local-first phase; add an auth check here before shared deployment.
+// Every action resolves the trusted identity (owner-scoped data access; redirects when there is none).
 
 function deps(): ExternalTestDeps {
   const env = readEnv();
-  return { db: getDatabase(), storage: getStorage(), maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024, localDir: resolveFromRoot(env.EXTERNAL_TEST_CASES_DIR) };
+  // Owner-scoped data access; drafts are stored per owner so one identity can never open another's upload.
+  return { db: actionDb(), ownerId: actionIdentity().ownerId, storage: getStorage(), maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024, localDir: resolveFromRoot(env.EXTERNAL_TEST_CASES_DIR) };
 }
 
 /** Step 1: load the workbook from an upload, a local path or a Google Drive link. */

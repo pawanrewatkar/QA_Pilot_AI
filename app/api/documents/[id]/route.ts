@@ -1,10 +1,12 @@
-import { getDatabase } from "@/lib/database";
+import { routeDb } from "@/lib/server/db";
 import { getStorage } from "@/lib/storage";
 
 /** Streams a stored reference document back to the user as a download. */
 export async function GET(_request: Request, ctx: RouteContext<"/api/documents/[id]">) {
+  const access = routeDb();
+  if (access.denied) return access.denied;
   const { id } = await ctx.params;
-  const doc = await getDatabase().documents.getById(id);
+  const doc = await access.db.documents.getById(id);
   if (!doc) return new Response("Not found", { status: 404 });
 
   const bytes = await getStorage().get(doc.storageKey);

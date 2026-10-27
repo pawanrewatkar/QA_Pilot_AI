@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import ExcelJS from "exceljs";
+import { LOCAL_OWNER_ID } from "@/lib/auth/identity-constants";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SqliteEngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
@@ -83,7 +84,7 @@ describe.skipIf(!browserInstalled("chromium"))("External Test Case Testing again
     site = await startFixtureSite();
     db = createTestDb();
     root = makeTempDir();
-    deps = { db, storage: new LocalStorageProvider(root), maxUploadBytes: 10_000_000, localDir: makeTempDir() };
+    deps = { db, ownerId: LOCAL_OWNER_ID, storage: new LocalStorageProvider(root), maxUploadBytes: 10_000_000, localDir: makeTempDir() };
     runId = await execute(await sampleWorkbook(), ["desktop-1440x900", "tablet-768x1024"], "EXISTING_SHEET");
   }, INTEGRATION_TIMEOUT * 2);
 

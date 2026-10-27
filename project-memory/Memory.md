@@ -8,7 +8,7 @@
 > 5. After any significant implementation change (new feature, migration, architecture decision, or a known bug fixed or found), **update this file**: status (§6), decisions (§9) and, if relevant, the schema and commands.
 > 6. Never put credentials, tokens or passwords in this file.
 
-*Last verified against the code: 2026-10-23 (git `4ec51e8 "Phase 6 completed"`, working tree clean).*
+*Last verified against the code: 2026-10-26 (git `5190782 "Add project memory"` on `main`, in sync with `origin/main`, working tree clean). Phase 7 (deployment preparation) is in progress; see §10.*
 
 ---
 
@@ -256,6 +256,8 @@ Storage: local filesystem (data/storage)   DB: data/qa-pilot.db
 
 **Checks run on 2026-10-23:** `tsc --noEmit` ✅, `npm run lint` ✅, `npm run test:unit` ✅ (10 files, 243 tests).
 
+**Full baseline on 2026-10-26 (Phase 7, all green):** see §10.2.
+
 **Last full run (2026-10-09, at the Phase 6 commit):**
 - `npm test` (unit and real-browser integration): ✅ 15 files, 283 tests.
 - `npm run test:e2e`: ✅ 8/8, covering:
@@ -350,6 +352,7 @@ Always use the fixture site for automated tests, never third-party sites.
   - `STORAGE_PROVIDER` (local), `STORAGE_PATH`, `MAX_UPLOAD_MB`, `EXTERNAL_TEST_CASES_DIR`
   - `AI_PROVIDER` (local)
   - reserved, with no effect today: `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FIGMA_ACCESS_TOKEN`, `PAGESPEED_API_KEY`, `EMAIL_PROVIDER`, `SMTP_URL`
+- **Deployment files in the repo (verified 2026-10-26):** only `deploy/worker.Dockerfile` and `.dockerignore`. There is **no** `.github/` folder (no GitHub Actions workflows) and **no** `vercel.json`.
 - **Vercel readiness:**
   - The web app is Vercel-compatible.
   - The worker **must not** run on Vercel serverless (time limits, no browsers); use `deploy/worker.Dockerfile` (`mcr.microsoft.com/playwright:v1.63.0-noble`).
@@ -376,3 +379,113 @@ Always use the fixture site for automated tests, never third-party sites.
 - Whether to implement the JSON and CSV report formats and per-section report options, or remove them from the database and configuration model.
 - Whether real credential-based login testing is wanted (it needs a secure secret store).
 - Whether external tests should support `.csv` / `.xls` files and links that open in a new tab.
+
+---
+
+## 10. Phase 7 — Deployment preparation (in progress; nothing migrated yet)
+
+**Target** (requested by the user, not yet implemented):
+
+| Part | Target |
+| --- | --- |
+| Web app | Vercel |
+| Database | Supabase Free (PostgreSQL) |
+| Browser test runner | GitHub Actions running the worker |
+| Screenshots and reports | Supabase Storage |
+| Local mode | Must keep working unchanged (SQLite and local files) |
+
+Phase 7 so far is preparation only. No database migration, no deleted files, no behaviour changes and no new dependencies.
+
+### 10.1 Verified state (2026-10-26)
+- **Git:** branch `main` at `5190782`, in sync with `origin/main` (`https://github.com/pawanrewatkar/QA_Pilot_AI.git`). Working tree clean, no stashes.
+- **Processes:** neither the app nor the worker was running at backup time. Port 3000 was free, and the only Node process was an unrelated tool runtime. Nothing needed stopping.
+- **Live database** `data/qa-pilot.db`:
+  - schema v6, 35 tables, integrity ok, 0 foreign-key violations;
+  - rows: 0 projects, 0 runs, 12 `activity_log` rows, 4 historical jobs, 1 stale worker heartbeat.
+  - `data/storage/runs/a3ee8993-…/` holds 10 orphaned screenshots from the project "Avisa Recovery", which was deleted on 2026-10-07, before the Phase 5 file-cleanup fix. They are kept as-is.
+
+### 10.2 Backup (verified)
+- **Location:** `data/backups/pre-phase7-20261026-211401/` (git-ignored through `/data/*`). It contains:
+  - `qa-pilot.db`, `qa-pilot.db-wal` and `qa-pilot.db-shm`, copied together;
+  - `storage/` (all 10 files);
+  - `SHA256SUMS` (the backup) and `SHA256SUMS.original` (the live files at backup time). They match.
+- **Restore test:** a scratch copy opened read-only passed the integrity check (schema 6, 35 tables, 0 FK violations, the same row counts). The backup itself was not modified (`sha256sum -c` passes).
+- **After the baseline tests:** the live database files are byte-identical to the backup, so the tests did not touch `data/`.
+- **How to restore:** stop the app and worker, then copy all three `qa-pilot.db*` files (and `storage/` if needed) back into `data/`. Never restore the main `.db` file without its `-wal` file.
+
+### 10.3 Baseline results (2026-10-26, scripts from `package.json`)
+
+| Script | Result | Time |
+| --- | --- | --- |
+| `npm run typecheck` | ✅ | 6 s |
+| `npm run lint` | ✅ no problems | 13 s |
+| `npm run test:unit` | ✅ 10 files, 243 tests | 7 s |
+| `npm run test:integration` | ✅ 5 files, 40 tests (real Chromium) | 268 s |
+| `npm run build` | ✅ | 17 s |
+| `npm run test:e2e` | ✅ 8/8: full UI workflow, the external Excel flow, axe on 19 pages, no overflow at 390 px | 203 s |
+
+### 10.4 Coupling found (what the migration has to change)
+- **Database:**
+  - The web side uses the async `DatabaseProvider` interface.
+  - The **worker side uses synchronous better-sqlite3 directly** through `SqliteDatabase`. This covers 14 files and about 204 `.prepare()` calls: `engine-store.ts`, `job-queue.ts`, `bugs/engine.ts`, `reports/data.ts`, `reports/generate.ts`, `external-tests/finalize.ts`, and the `local/*` repositories.
+  - A Postgres version therefore needs async worker-side code, not just new repository classes.
+- **SQLite-specific SQL:**
+  - in a few files each: `json_extract`, `strftime` defaults, `RETURNING`, `ON CONFLICT`, `INSERT OR IGNORE`, `PRAGMA`;
+  - in about 9 files each: `rowid` ordering and `db.transaction(...)`.
+  - Job claiming relies on SQLite single-writer locking. Postgres needs `FOR UPDATE SKIP LOCKED`.
+- **Storage:** only `LocalStorageProvider` exists. `node:fs` is also used by `sqlite-client.ts`, `external-tests/sources.ts` (local-path source) and `testing/modules/downloads.ts` (worker only).
+- **Worker:** it already supports `npm run worker -- --once`, which drains every queued job (including a report queued by a run that just finished) and exits. That fits a GitHub Actions job. Heartbeats and recovery work per worker id.
+- **Web bundle:** the web app does not import Playwright or the engine. `next.config.ts` keeps `better-sqlite3` and `playwright` external. Server actions allow 11 MB, but Vercel limits request bodies to 4.5 MB.
+
+### 10.5 Features that must keep working (acceptance list for the migration)
+1. Projects (CRUD, Test Email, reference documents) and test configurations.
+2. Crawl with live progress and cancel; page selection and manual pages.
+3. Test runs across every module, browser and viewport, with live progress and cancel. Results stay evidence-based and use exactly the five statuses.
+4. Screenshot evidence (masked) and the artifact route.
+5. The bug engine (FAIL only, fingerprints, occurrences, reopening), bug list and detail, status changes.
+6. Reports: PDF, HTML, testing Excel and bug Excel; the Report Center; auto-generation after a run.
+7. History, regression comparison and dashboard analytics.
+8. External Test Case Testing:
+   - upload, local path and Drive-link sources;
+   - mapping, devices, HUMAN INTERACTION handling;
+   - versioned result columns and the Excel download.
+9. Settings (provider status, never secret values) and Copyright & IP.
+10. Project deletion with full cleanup (records, files, queued jobs).
+11. **Local mode unchanged:** `npm run dev:all` with SQLite and local storage, and every existing test suite.
+
+### 10.6 Migration checklist (plan; not started)
+1. **Decide** (open questions): authentication before going public; whether the Vercel app is private; GitHub plan and Actions minutes; acceptable worker latency (cron vs dispatch). Re-check the current Supabase Free and Vercel Hobby limits, which are not verified here: database size, storage size, pausing of inactive projects, function duration, request body size.
+2. **Postgres schema:** port migrations 1–6 into one Postgres baseline with the same tables, CHECK constraints, foreign keys, cascades and indexes. Keep `schema_migrations`. Make timestamp defaults ISO text, or switch to `timestamptz` consistently.
+3. **`PostgresDatabaseProvider`:** implement it behind the existing `DatabaseProvider` (replacing the Supabase stub), selected by `DATABASE_PROVIDER`. SQLite stays the default.
+4. **Worker store:** make the worker-side store, job queue, bug engine, report data and finalizer async behind interfaces, with SQLite and Postgres implementations. Job claiming must use `SKIP LOCKED`.
+5. **`SupabaseStorageProvider`:** implement it behind `StorageProvider`, using private buckets with server-only keys. Serve downloads through the existing routes or signed URLs.
+6. **GitHub Actions workflow:**
+   - install, then `playwright install --with-deps`, then `npm run worker -- --once` with secrets;
+   - triggered on a schedule and/or by `workflow_dispatch` from the web app;
+   - a `concurrency` group so only one worker runs at a time.
+7. **Vercel project:**
+   - server-only environment variables (no `NEXT_PUBLIC_` secrets);
+   - make sure no web route loads the native `better-sqlite3` module or Playwright;
+   - uploads larger than 4.5 MB go straight to storage.
+8. **Data:** the live database currently has 0 projects and 0 runs, so there is no user data to migrate except the activity log. Migrate it or start fresh, as the user decides.
+9. **Tests:**
+   - the full baseline (§10.3) must stay green in local mode;
+   - add a CI job running unit tests against Postgres (e.g. a service container) plus the integration tests;
+   - run the end-to-end suite against a preview deployment where practical.
+10. **Rollout:** preview deployment, then smoke test (create project, crawl, run, bug, report, history, external Excel), then production.
+
+### 10.7 Rollback plan
+- **Code:** each step goes on its own branch with a PR. Never force-push `main`. Revert the merge commit if needed.
+- **Configuration:** local mode is the default (`DATABASE_PROVIDER=local`, local storage). Rolling back the hosted setup means switching the environment variables back, or disabling the Vercel deployment and the Actions workflow. Local data is untouched.
+- **Data:**
+  - SQLite: restore from `data/backups/pre-phase7-20261026-211401/` (see §10.2).
+  - Supabase: take a dump before each schema change, and keep migrations additive (the same rule as SQLite).
+- **Secrets:** rotate the Supabase keys if they are ever exposed. Keys live only in Vercel and GitHub encrypted secrets.
+
+### 10.8 Risks
+- **Biggest change:** making the synchronous worker code async (§10.4). It touches the run executor, bug engine, reports and External Test Case Testing.
+- **Worker latency:** Actions-based workers start with a delay (cron intervals of at least about 5 minutes and best-effort scheduling, plus runner start-up). Long runs use Actions minutes.
+- **Free-tier limits:** storage and database size (screenshots and HTML reports with embedded images grow quickly); inactive Supabase Free projects may pause.
+- **Vercel:** function time limits and the 4.5 MB body limit; no persistent disk.
+- **Security:** there is no authentication yet, so a public deployment would expose every project, every report and the job trigger.
+- **Local-path test-case source:** not meaningful on Vercel; it should be disabled there.

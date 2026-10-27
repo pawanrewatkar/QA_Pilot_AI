@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { LOCAL_OWNER_ID } from "@/lib/auth/identity-constants";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import { SqliteEngineStore } from "@/lib/database/local/engine-store";
@@ -300,7 +301,7 @@ describe("execution workflow", () => {
   const okFetch = async (): Promise<HttpResult> => ({ ok: true, status: 200, finalUrl: "https://acme.test/", chain: [], contentType: "text/html", contentLength: null, durationMs: 1 });
   beforeEach(() => {
     db = createTestDb();
-    deps = { db, storage: new LocalStorageProvider(makeTempDir()), maxUploadBytes: 5_000_000, localDir: makeTempDir(), fetcher: okFetch };
+    deps = { db, ownerId: LOCAL_OWNER_ID, storage: new LocalStorageProvider(makeTempDir()), maxUploadBytes: 5_000_000, localDir: makeTempDir(), fetcher: okFetch };
   });
   afterEach(async () => db.close());
 

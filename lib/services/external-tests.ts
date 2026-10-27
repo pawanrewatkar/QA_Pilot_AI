@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ALL_VIEWPORTS } from "@/lib/constants/testing";
 import { normalizeCrawlUrl } from "@/lib/crawler/normalize";
 import type { DatabaseProvider } from "@/lib/database/provider";
@@ -18,7 +18,10 @@ import { createProject } from "./projects";
  * draft), inspect a worksheet (mapping and preview), then start the execution.
  */
 export interface ExternalTestDeps {
+  /** Owner-scoped provider (lib/server/db.ts) in the app; drafts and projects belong to `ownerId`. */
   db: DatabaseProvider;
+  /** Trusted owner id of the identity (never from request input). */
+  ownerId: string;
   storage: StorageProvider;
   maxUploadBytes: number;
   /** Folder for local-path sources (EXTERNAL_TEST_CASES_DIR). */
@@ -54,7 +57,10 @@ export interface DraftInspection {
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 const DRAFT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const draftKey = (id: string) => `external-drafts/${id}/source.xlsx`;
+/** Drafts live under a hash of the owner id, so a draft id alone never opens another identity's upload. */
+const ownerSegment = (ownerId: string) => createHash("sha256").update(ownerId).digest("hex").slice(0, 32);
+const draftPrefix = (ownerId: string, id: string) => `external-drafts/${ownerSegment(ownerId)}/${id}`;
+const draftKey = (ownerId: string, id: string) => `${draftPrefix(ownerId, id)}/source.xlsx`;
 const PREVIEW_ROWS = 8;
 
 const fail = (error: unknown): { ok: false; error: string } => ({
@@ -110,7 +116,7 @@ export async function inspectSource(deps: ExternalTestDeps, input: SourceInput):
     }
     if (!first) throw firstError ?? new WorkbookError("No worksheet with a header row and test cases was found.");
     const draftId = randomUUID();
-    await deps.storage.put(draftKey(draftId), file.bytes);
+    await deps.storage.put(draftKey(deps.ownerId, draftId), file.bytes);
     return { ok: true, value: { draftId, fileName: file.fileName, sourceKind: file.kind, sourceName: file.sourceName, sheets, sheet: first } };
   } catch (error) {
     return fail(error);
@@ -119,7 +125,7 @@ export async function inspectSource(deps: ExternalTestDeps, input: SourceInput):
 
 async function loadDraft(deps: ExternalTestDeps, draftId: string) {
   if (!DRAFT_ID.test(draftId)) throw new SourceError("The uploaded workbook could not be found. Load it again.");
-  const bytes = await deps.storage.get(draftKey(draftId));
+  const bytes = await deps.storage.get(draftKey(deps.ownerId, draftId));
   if (!bytes) throw new SourceError("The uploaded workbook is no longer available. Load it again.");
   return { bytes, wb: await loadWorkbook(bytes) };
 }
@@ -200,7 +206,7 @@ export async function startExternalExecution(deps: ExternalTestDeps, input: Star
   // The source workbook lives with the project (deleted with it); the draft copy is removed.
   const storageKey = `projects/${projectId}/external-test-cases/${randomUUID()}.xlsx`;
   await deps.storage.put(storageKey, draft.bytes);
-  await deps.storage.deletePrefix(`external-drafts/${input.draftId}`);
+  await deps.storage.deletePrefix(draftPrefix(deps.ownerId, input.draftId));
 
   const runId = await deps.db.externalTests.create({
     projectId,

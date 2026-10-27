@@ -69,6 +69,8 @@ export interface ProjectQuery {
   search?: string;
   filter?: ProjectFilter;
   sort?: ProjectSort;
+  /** Restricts results to one owner. Set by the owner-scoped provider from the trusted server-side identity, never from request input. */
+  ownerId?: string;
 }
 
 export const DOCUMENT_KINDS = ["REFERENCE", "OTHER"] as const;
@@ -224,6 +226,8 @@ export interface BugDetail extends BugRecord {
 }
 
 export interface BugQuery {
+  /** Set only by the owner-scoped provider (trusted identity). */
+  ownerId?: string;
   projectId?: string;
   testRunId?: string;
   search?: string;
@@ -306,6 +310,8 @@ export interface RunHistoryRecord {
 }
 
 export interface HistoryQuery {
+  /** Set only by the owner-scoped provider (trusted identity). */
+  ownerId?: string;
   projectId?: string;
   search?: string;
   status?: TestRunStatus;
@@ -325,6 +331,8 @@ export interface ActivityRecord {
 }
 
 export interface NewActivity {
+  /** Owner of the entry. Set by the owner-scoped provider; when absent it is taken from the project. */
+  ownerId?: string | null;
   projectId: string | null;
   entityType: string;
   entityId: string | null;
@@ -369,6 +377,8 @@ export interface RegressionRecord {
 
 export interface ListOptions {
   limit?: number;
+  /** Set only by the owner-scoped provider (trusted identity). */
+  ownerId?: string;
   projectId?: string;
   testRunId?: string;
 }

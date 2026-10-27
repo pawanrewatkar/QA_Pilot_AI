@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { readEnv } from "@/lib/config/env";
-import { getDatabase } from "@/lib/database";
+import { actionDb } from "@/lib/server/db";
 import { createProject, deleteProject, updateProject, type ProjectServiceDeps, type UploadedFile } from "@/lib/services/projects";
 import { deleteTestConfiguration, saveTestConfiguration } from "@/lib/services/test-configurations";
 import { getStorage } from "@/lib/storage";
@@ -21,7 +21,7 @@ export interface ProjectFormState {
 const PROJECT_FIELDS = ["name", "websiteUrl", "description", "figmaUrl", "testEmail"] as const;
 
 function deps(): ProjectServiceDeps {
-  return { db: getDatabase(), storage: getStorage(), maxUploadBytes: readEnv().MAX_UPLOAD_MB * 1024 * 1024 };
+  return { db: actionDb(), storage: getStorage(), maxUploadBytes: readEnv().MAX_UPLOAD_MB * 1024 * 1024 };
 }
 
 function readProjectFields(formData: FormData): Record<string, string> {
@@ -78,7 +78,7 @@ export async function saveConfigurationAction(
   prev: ConfigurationFormState,
   payload: unknown,
 ): Promise<ConfigurationFormState> {
-  const result = await saveTestConfiguration(getDatabase(), projectId, prev.configurationId, payload);
+  const result = await saveTestConfiguration(actionDb(), projectId, prev.configurationId, payload);
   if (!result.ok) return { ...prev, errors: result.errors, savedAt: null };
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/history");
@@ -88,7 +88,7 @@ export async function saveConfigurationAction(
 export async function deleteConfigurationAction(formData: FormData): Promise<void> {
   const projectId = String(formData.get("projectId") ?? "");
   const configurationId = String(formData.get("configurationId") ?? "");
-  if (projectId && configurationId) await deleteTestConfiguration(getDatabase(), projectId, configurationId);
+  if (projectId && configurationId) await deleteTestConfiguration(actionDb(), projectId, configurationId);
   revalidatePath(`/projects/${projectId}`);
   redirect(`/projects/${projectId}`);
 }

@@ -24,6 +24,7 @@ import type {
   TestResultRepository,
   WorkerRepository,
 } from "../provider";
+import { ownedProjectIds } from "./ownership";
 import type { SqliteDatabase } from "./sqlite-client";
 
 type Row = Record<string, unknown>;
@@ -91,6 +92,10 @@ export class LocalPageRepository implements PageRepository {
     if (q.projectId) {
       where.push("pg.project_id = ?");
       params.push(q.projectId);
+    }
+    if (q.ownerId !== undefined) {
+      where.push(ownedProjectIds("pg.project_id"));
+      params.push(q.ownerId);
     }
     if (q.pageType) {
       where.push("pg.page_type = ?");
@@ -482,6 +487,10 @@ export class LocalTestCaseRepository implements TestCaseRepository {
     if (options.testRunId) {
       where.push("tc.test_run_id = ?");
       params.push(options.testRunId);
+    }
+    if (options.ownerId !== undefined) {
+      where.push(ownedProjectIds("tc.project_id"));
+      params.push(options.ownerId);
     }
     const rows = this.db
       .prepare(

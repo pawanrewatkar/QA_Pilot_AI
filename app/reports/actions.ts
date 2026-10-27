@@ -2,16 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getDatabase } from "@/lib/database";
+import { actionDb } from "@/lib/server/db";
 import { bundlePrefix } from "@/lib/reports/paths";
 import { getStorage } from "@/lib/storage";
 
-// No authentication in this local-first phase; add an auth check here before shared deployment.
+// Every action resolves the trusted identity through actionDb() (owner-scoped data access; redirects when there is none).
 
 export async function generateReportAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("testRunId") ?? "");
   if (!runId) return;
-  const db = getDatabase();
+  const db = actionDb();
   let requested = false;
   try {
     const bundle = await db.reports.requestBundle(runId);
@@ -28,7 +28,7 @@ export async function generateReportAction(formData: FormData): Promise<void> {
 export async function deleteReportAction(formData: FormData): Promise<void> {
   const id = String(formData.get("bundleId") ?? "");
   if (!id) return;
-  const db = getDatabase();
+  const db = actionDb();
   const bundle = await db.reports.getBundle(id);
   if (!bundle) return;
   await db.reports.deleteBundle(id);

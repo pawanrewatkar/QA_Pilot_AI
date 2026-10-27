@@ -3,6 +3,7 @@ import { DeterministicDuplicateDetector } from "@/lib/bugs/duplicates";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import type { BugDetail, BugEvidenceRecord, BugHistoryRecord, BugOccurrenceRecord, BugQuery, BugRecord, BugStatus } from "@/types";
 import type { BugFacets, BugRepository } from "../provider";
+import { ownedProjectIds } from "./ownership";
 import type { SqliteDatabase } from "./sqlite-client";
 
 type Row = Record<string, unknown>;
@@ -49,6 +50,7 @@ export class LocalBugRepository implements BugRepository {
       params.push(...p);
     };
     if (q.projectId) add("b.project_id = ?", q.projectId);
+    if (q.ownerId !== undefined) add(ownedProjectIds("b.project_id"), q.ownerId);
     if (q.testRunId) add("EXISTS (SELECT 1 FROM bug_occurrences o WHERE o.bug_id = b.id AND o.test_run_id = ?)", q.testRunId);
     if (q.severity) add("b.severity = ?", q.severity);
     if (q.priority) add("b.priority = ?", q.priority);
@@ -83,9 +85,10 @@ export class LocalBugRepository implements BugRepository {
     return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM bugs b ${sql}`).get(...params) as Row).c);
   }
 
-  async facets(projectId?: string): Promise<BugFacets> {
-    const scope = projectId ? "WHERE b.project_id = ?" : "";
-    const params = projectId ? [projectId] : [];
+  async facets(projectId?: string, ownerId?: string): Promise<BugFacets> {
+    const conditions = [...(projectId ? ["b.project_id = ?"] : []), ...(ownerId !== undefined ? [ownedProjectIds("b.project_id")] : [])];
+    const scope = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const params = [...(projectId ? [projectId] : []), ...(ownerId !== undefined ? [ownerId] : [])];
     const pages = this.db.prepare(`SELECT DISTINCT b.page_id AS id, b.page_url AS url FROM bugs b ${scope} ${scope ? "AND" : "WHERE"} b.page_id IS NOT NULL ORDER BY b.page_url LIMIT 500`).all(...params) as Row[];
     const types = this.db.prepare(`SELECT DISTINCT b.test_type AS t FROM bugs b ${scope} ${scope ? "AND" : "WHERE"} b.test_type IS NOT NULL ORDER BY t`).all(...params) as Row[];
     const browsers = this.db

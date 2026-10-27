@@ -1,17 +1,17 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getDatabase } from "@/lib/database";
+import { actionDb } from "@/lib/server/db";
 import { BUG_STATUSES, type BugStatus } from "@/types";
 
-// No authentication in this local-first phase; add an auth check here before shared deployment.
+// Every action resolves the trusted identity through actionDb() (owner-scoped data access; redirects when there is none).
 
 export async function updateBugStatusAction(formData: FormData): Promise<void> {
   const id = String(formData.get("bugId") ?? "");
   const status = BUG_STATUSES.find((s) => s === formData.get("status")) as BugStatus | undefined;
   const note = String(formData.get("note") ?? "").trim().slice(0, 1000) || null;
   if (!id || !status) return;
-  const db = getDatabase();
+  const db = actionDb();
   const bug = await db.bugs.updateStatus(id, status, note);
   if (bug) {
     await db.activity.record({ projectId: bug.projectId, entityType: "bug", entityId: id, action: "updated", summary: `${bug.code ?? "Bug"} status set to ${status.replace(/_/g, " ")}` });
@@ -24,7 +24,7 @@ export async function updateBugStatusAction(formData: FormData): Promise<void> {
 export async function createBugsFromRunAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("testRunId") ?? "");
   if (!runId) return;
-  const db = getDatabase();
+  const db = actionDb();
   const run = await db.testRuns.getById(runId);
   if (!run || run.status === "PENDING" || run.status === "RUNNING") return;
   const summary = await db.bugs.createFromRun(runId);

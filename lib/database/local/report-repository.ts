@@ -15,10 +15,11 @@ export class LocalReportRepository implements ReportRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
   async list(options: ListOptions = {}): Promise<ReportRecord[]> {
-    const where = options.projectId ? "WHERE rp.project_id = ?" : "";
+    const conditions = [...(options.projectId ? ["rp.project_id = ?"] : []), ...(options.ownerId !== undefined ? ["p.owner_id = ?"] : [])];
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = this.db
       .prepare(`SELECT rp.*, p.name AS project_name FROM reports rp JOIN projects p ON p.id = rp.project_id ${where} ORDER BY rp.created_at DESC, rp.rowid DESC LIMIT ?`)
-      .all(...(options.projectId ? [options.projectId] : []), clampLimit(options.limit, 1000)) as Row[];
+      .all(...(options.projectId ? [options.projectId] : []), ...(options.ownerId !== undefined ? [options.ownerId] : []), clampLimit(options.limit, 1000)) as Row[];
     return rows.map((row) => ({
       id: String(row.id),
       projectId: String(row.project_id),
@@ -39,6 +40,10 @@ export class LocalReportRepository implements ReportRepository {
     if (q.projectId) {
       where.push("b.project_id = ?");
       params.push(q.projectId);
+    }
+    if (q.ownerId !== undefined) {
+      where.push("p.owner_id = ?");
+      params.push(q.ownerId);
     }
     if (q.testRunId) {
       where.push("b.test_run_id = ?");

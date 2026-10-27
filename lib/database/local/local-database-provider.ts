@@ -35,6 +35,7 @@ import type {
   ReportRepository,
   HistoryRepository,
   ExternalTestRepository,
+  OwnershipRepository,
   TestCaseRepository,
   TestConfigurationRepository,
   TestRunRepository,
@@ -52,6 +53,7 @@ import {
   runDetail,
 } from "./engine-repositories";
 import { LocalBugRepository } from "./bug-repository";
+import { LocalOwnershipRepository, ownedProjectIds, ownedRunIds } from "./ownership";
 import { LocalHistoryRepository } from "./history-repository";
 import { LocalExternalTestRepository } from "./external-test-repository";
 import { LocalReportRepository } from "./report-repository";
@@ -170,6 +172,11 @@ class LocalProjectRepository implements ProjectRepository {
       params.push(pattern, pattern, pattern);
     }
 
+    if (query.ownerId !== undefined) {
+      where.push("p.owner_id = ?");
+      params.push(query.ownerId);
+    }
+
     switch (query.filter) {
       case "with-figma":
         where.push("p.figma_url IS NOT NULL");
@@ -201,15 +208,16 @@ class LocalProjectRepository implements ProjectRepository {
     return row ? mapProjectSummary(row) : null;
   }
 
-  async create(input: ProjectInput): Promise<Project> {
+  async create(input: ProjectInput, ownerId?: string): Promise<Project> {
     const id = randomUUID();
     const ts = now();
     this.db
       .prepare(
-        `INSERT INTO projects (id, name, website_url, description, figma_url, test_email, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO projects (id, name, website_url, description, figma_url, test_email, created_at, updated_at, owner_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, input.name, input.websiteUrl, input.description, input.figmaUrl, input.testEmail, ts, ts);
+      // Without a trusted owner the project has none and is visible to no scoped identity (fail closed).
+      .run(id, input.name, input.websiteUrl, input.description, input.figmaUrl, input.testEmail, ts, ts, ownerId ?? null);
     return mapProject(this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Row);
   }
 
@@ -251,8 +259,10 @@ class LocalProjectRepository implements ProjectRepository {
     return [...runs.map((r) => `runs/${String(r.id)}`), ...bundles.map((b) => `reports/${String(b.id)}`)];
   }
 
-  async count(): Promise<number> {
-    return num((this.db.prepare("SELECT COUNT(*) AS c FROM projects").get() as Row).c);
+  async count(ownerId?: string): Promise<number> {
+    return ownerId === undefined
+      ? num((this.db.prepare("SELECT COUNT(*) AS c FROM projects").get() as Row).c)
+      : num((this.db.prepare("SELECT COUNT(*) AS c FROM projects WHERE owner_id = ?").get(ownerId) as Row).c);
   }
 }
 
@@ -356,10 +366,18 @@ class LocalTestConfigurationRepository implements TestConfigurationRepository {
   }
 }
 
-function projectScope(options: ListOptions, alias: string): { clause: string; params: unknown[] } {
-  return options.projectId
-    ? { clause: `WHERE ${alias}.project_id = ?`, params: [options.projectId] }
-    : { clause: "", params: [] };
+function projectScope(options: ListOptions, alias: string, ownerColumn?: string): { clause: string; params: unknown[] } {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.projectId) {
+    where.push(`${alias}.project_id = ?`);
+    params.push(options.projectId);
+  }
+  if (options.ownerId !== undefined) {
+    where.push(ownerColumn ? `${ownerColumn} = ?` : ownedProjectIds(`${alias}.project_id`));
+    params.push(options.ownerId);
+  }
+  return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
 }
 
 class LocalTestRunRepository implements TestRunRepository {
@@ -420,10 +438,10 @@ class LocalActivityRepository implements ActivityRepository {
     const id = randomUUID();
     this.db
       .prepare(
-        `INSERT INTO activity_log (id, project_id, entity_type, entity_id, action, summary, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO activity_log (id, project_id, entity_type, entity_id, action, summary, created_at, owner_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT owner_id FROM projects WHERE id = ?)))`,
       )
-      .run(id, entry.projectId, entry.entityType, entry.entityId, entry.action, entry.summary, now());
+      .run(id, entry.projectId, entry.entityType, entry.entityId, entry.action, entry.summary, now(), entry.ownerId ?? null, entry.projectId);
     const row = this.db
       .prepare(
         `SELECT a.*, p.name AS project_name FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id WHERE a.id = ?`,
@@ -433,7 +451,7 @@ class LocalActivityRepository implements ActivityRepository {
   }
 
   async list(options: ListOptions = {}): Promise<ActivityRecord[]> {
-    const { clause, params } = projectScope(options, "a");
+    const { clause, params } = projectScope(options, "a", "a.owner_id");
     const rows = this.db
       .prepare(
         `SELECT a.*, p.name AS project_name FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id
@@ -447,26 +465,27 @@ class LocalActivityRepository implements ActivityRepository {
 class LocalDashboardRepository implements DashboardRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  async getMetrics(): Promise<DashboardMetrics> {
-    const row = this.db
-      .prepare(
-        `SELECT
-          (SELECT COUNT(*) FROM projects) AS total_projects,
-          (SELECT COUNT(*) FROM test_runs) AS total_test_runs,
-          (SELECT COUNT(DISTINCT page_id) FROM test_run_pages WHERE status = 'COMPLETED') AS total_pages_tested,
-          (SELECT COUNT(*) FROM test_cases) AS total_test_cases,
-          (SELECT COUNT(*) FROM test_results WHERE status = 'PASS') AS passed,
-          (SELECT COUNT(*) FROM test_results WHERE status = 'FAIL') AS failed,
-          (SELECT COUNT(*) FROM test_results WHERE status = 'WARNING') AS warnings,
-          (SELECT COUNT(*) FROM test_results WHERE status = 'NOT EXECUTED') AS not_executed,
-          (SELECT COUNT(*) FROM bugs) AS bugs,
-          (SELECT COUNT(*) FROM bugs WHERE status IN ('OPEN','REOPENED','IN_PROGRESS')) AS open_bugs,
-          (SELECT COUNT(*) FROM bugs WHERE severity = 'CRITICAL') AS critical_bugs,
-          (SELECT COUNT(*) FROM bugs WHERE severity = 'HIGH') AS high_bugs,
-          (SELECT COUNT(*) FROM bugs WHERE severity = 'MEDIUM') AS medium_bugs,
-          (SELECT COUNT(*) FROM bugs WHERE severity = 'LOW') AS low_bugs`,
-      )
-      .get() as Row;
+  async getMetrics(ownerId?: string): Promise<DashboardMetrics> {
+    // With an owner, every count is restricted to that owner's projects (each fragment binds the owner id once).
+    const scoped = ownerId !== undefined;
+    const and = (fragment: string) => (scoped ? ` AND ${fragment}` : "");
+    const where = (fragment: string) => (scoped ? ` WHERE ${fragment}` : "");
+    const sql = `SELECT
+          (SELECT COUNT(*) FROM projects${where("owner_id = ?")}) AS total_projects,
+          (SELECT COUNT(*) FROM test_runs${where(ownedProjectIds("project_id"))}) AS total_test_runs,
+          (SELECT COUNT(DISTINCT page_id) FROM test_run_pages WHERE status = 'COMPLETED'${and(ownedRunIds("test_run_id"))}) AS total_pages_tested,
+          (SELECT COUNT(*) FROM test_cases${where(ownedProjectIds("project_id"))}) AS total_test_cases,
+          (SELECT COUNT(*) FROM test_results WHERE status = 'PASS'${and(ownedRunIds("test_run_id"))}) AS passed,
+          (SELECT COUNT(*) FROM test_results WHERE status = 'FAIL'${and(ownedRunIds("test_run_id"))}) AS failed,
+          (SELECT COUNT(*) FROM test_results WHERE status = 'WARNING'${and(ownedRunIds("test_run_id"))}) AS warnings,
+          (SELECT COUNT(*) FROM test_results WHERE status = 'NOT EXECUTED'${and(ownedRunIds("test_run_id"))}) AS not_executed,
+          (SELECT COUNT(*) FROM bugs${where(ownedProjectIds("project_id"))}) AS bugs,
+          (SELECT COUNT(*) FROM bugs WHERE status IN ('OPEN','REOPENED','IN_PROGRESS')${and(ownedProjectIds("project_id"))}) AS open_bugs,
+          (SELECT COUNT(*) FROM bugs WHERE severity = 'CRITICAL'${and(ownedProjectIds("project_id"))}) AS critical_bugs,
+          (SELECT COUNT(*) FROM bugs WHERE severity = 'HIGH'${and(ownedProjectIds("project_id"))}) AS high_bugs,
+          (SELECT COUNT(*) FROM bugs WHERE severity = 'MEDIUM'${and(ownedProjectIds("project_id"))}) AS medium_bugs,
+          (SELECT COUNT(*) FROM bugs WHERE severity = 'LOW'${and(ownedProjectIds("project_id"))}) AS low_bugs`;
+    const row = this.db.prepare(sql).get(...(scoped ? Array(14).fill(ownerId) : [])) as Row;
     return {
       totalProjects: num(row.total_projects),
       totalTestRuns: num(row.total_test_runs),
@@ -485,21 +504,21 @@ class LocalDashboardRepository implements DashboardRepository {
     };
   }
 
-  async getResultTrend(days: number): Promise<ResultTrendPoint[]> {
+  async getResultTrend(days: number, ownerId?: string): Promise<ResultTrendPoint[]> {
     const since = new Date(Date.now() - Math.max(1, days) * 86_400_000).toISOString();
     const rows = this.db
       .prepare(
         `SELECT substr(executed_at, 1, 10) AS day,
            SUM(status = 'PASS') AS passed, SUM(status = 'FAIL') AS failed, SUM(status = 'WARNING') AS warnings
          FROM test_results
-         WHERE executed_at IS NOT NULL AND executed_at >= ? AND status IN ('PASS','FAIL','WARNING')
+         WHERE executed_at IS NOT NULL AND executed_at >= ? AND status IN ('PASS','FAIL','WARNING')${ownerId !== undefined ? ` AND ${ownedRunIds("test_run_id")}` : ""}
          GROUP BY day ORDER BY day ASC`,
       )
-      .all(since) as Row[];
+      .all(since, ...(ownerId !== undefined ? [ownerId] : [])) as Row[];
     return rows.map((r) => ({ day: String(r.day), passed: num(r.passed), failed: num(r.failed), warnings: num(r.warnings) }));
   }
 
-  async getRegressions(limit = 20): Promise<RegressionRecord[]> {
+  async getRegressions(limit = 20, ownerId?: string): Promise<RegressionRecord[]> {
     // Compares each project's two most recent COMPLETED runs. Test cases are matched by
     // identity (module + title + page) because cases may be regenerated per run.
     const rows = this.db
@@ -507,7 +526,7 @@ class LocalDashboardRepository implements DashboardRepository {
         `WITH ranked AS (
            SELECT id, project_id,
              ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY COALESCE(completed_at, created_at) DESC, rowid DESC) AS rn
-           FROM test_runs WHERE status = 'COMPLETED'
+           FROM test_runs WHERE status = 'COMPLETED'${ownerId !== undefined ? ` AND ${ownedProjectIds("project_id")}` : ""}
          )
          SELECT DISTINCT latest.project_id, p.name AS project_name, ltc.id AS test_case_id, ltc.title AS test_case_title,
            prev.id AS previous_run_id, latest.id AS latest_run_id
@@ -522,7 +541,7 @@ class LocalDashboardRepository implements DashboardRepository {
          WHERE latest.rn = 1
          LIMIT ?`,
       )
-      .all(clampLimit(limit)) as Row[];
+      .all(...(ownerId !== undefined ? [ownerId] : []), clampLimit(limit)) as Row[];
     return rows.map((r) => ({
       projectId: String(r.project_id),
       projectName: String(r.project_name),
@@ -552,6 +571,7 @@ export class LocalDatabaseProvider implements DatabaseProvider {
   readonly externalTests: ExternalTestRepository;
   readonly activity: ActivityRepository;
   readonly dashboard: DashboardRepository;
+  readonly ownership: OwnershipRepository;
 
   /** Exposed for the worker and tests; app code should go through the repositories. */
   readonly sqlite: SqliteDatabase;
@@ -573,6 +593,7 @@ export class LocalDatabaseProvider implements DatabaseProvider {
     this.externalTests = new LocalExternalTestRepository(db);
     this.activity = new LocalActivityRepository(db);
     this.dashboard = new LocalDashboardRepository(db);
+    this.ownership = new LocalOwnershipRepository(db);
   }
 
   /** Opens the database file and applies pending migrations. */

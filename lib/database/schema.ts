@@ -799,6 +799,28 @@ CREATE INDEX idx_external_test_observations_run ON external_test_observations(te
 CREATE INDEX idx_external_test_observations_test_result_id ON external_test_observations(test_result_id);
 `,
   },
+  {
+    version: 7,
+    name: "resource_ownership",
+    sql: `
+-- Ownership foundation. Every resource belongs to a project (directly or through its test run), so the
+-- owner is stored once, on the project. owner_id is the stable identifier of the signed-in identity;
+-- with Supabase Auth it will be auth.users.id (a UUID).
+--
+-- Existing rows: before this migration the application had no users, so every existing project was
+-- created by the single local operator. They are assigned to the local operator identity
+-- 'local:default' (which can never collide with a Supabase UUID) and can later be reassigned to that
+-- operator's real account. Rows with a NULL owner are visible to no one (fail closed).
+ALTER TABLE projects ADD COLUMN owner_id TEXT;
+UPDATE projects SET owner_id = 'local:default' WHERE owner_id IS NULL;
+CREATE INDEX idx_projects_owner ON projects(owner_id, created_at);
+
+-- Activity entries keep their owner even after the project is deleted.
+ALTER TABLE activity_log ADD COLUMN owner_id TEXT;
+UPDATE activity_log SET owner_id = COALESCE((SELECT p.owner_id FROM projects p WHERE p.id = activity_log.project_id), 'local:default') WHERE owner_id IS NULL;
+CREATE INDEX idx_activity_owner ON activity_log(owner_id, created_at);
+`,
+  },
 ];
 
 /** Every table the application expects after all migrations run. */

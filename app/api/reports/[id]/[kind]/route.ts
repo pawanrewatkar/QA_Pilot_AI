@@ -1,4 +1,4 @@
-import { getDatabase } from "@/lib/database";
+import { routeDb } from "@/lib/server/db";
 import { REPORT_CONTENT_TYPES } from "@/lib/reports/paths";
 import { getStorage } from "@/lib/storage";
 
@@ -7,9 +7,11 @@ import { getStorage } from "@/lib/storage";
  * the browser. HTML is served with a sandbox CSP so the report cannot act on this app's origin.
  */
 export async function GET(request: Request, ctx: RouteContext<"/api/reports/[id]/[kind]">) {
+  const access = routeDb();
+  if (access.denied) return access.denied;
   const { id, kind } = await ctx.params;
   if (!Object.hasOwn(REPORT_CONTENT_TYPES, kind)) return new Response("Unknown report type", { status: 404 });
-  const file = await getDatabase().reports.getFile(id, kind);
+  const file = await access.db.reports.getFile(id, kind);
   if (!file) return new Response("Report not found", { status: 404 });
   const bytes = await getStorage().get(file.storageKey);
   if (!bytes) return new Response("File missing from storage", { status: 410 });

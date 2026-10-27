@@ -65,6 +65,8 @@ export interface DatabaseProvider {
   externalTests: ExternalTestRepository;
   activity: ActivityRepository;
   dashboard: DashboardRepository;
+  /** Resolves the owner of a resource through its parent chain (see lib/database/local/ownership.ts). */
+  ownership: OwnershipRepository;
 
   healthCheck(): Promise<DatabaseHealth>;
   close(): Promise<void>;
@@ -81,13 +83,14 @@ export interface DatabaseHealth {
 export interface ProjectRepository {
   list(query?: ProjectQuery): Promise<ProjectSummary[]>;
   getById(id: string): Promise<ProjectSummary | null>;
-  create(input: ProjectInput): Promise<Project>;
+  /** `ownerId` comes from the trusted server-side identity (owner-scoped provider), never from request input. */
+  create(input: ProjectInput, ownerId?: string): Promise<Project>;
   update(id: string, input: ProjectInput): Promise<Project | null>;
   /** Deletes the project and every record that belongs to it. Returns false if it did not exist. */
   delete(id: string): Promise<boolean>;
   /** Storage prefixes holding the project's run evidence and generated reports (read before deleting). */
   storagePrefixes(id: string): Promise<string[]>;
-  count(): Promise<number>;
+  count(ownerId?: string): Promise<number>;
 }
 
 export interface DocumentRepository {
@@ -204,7 +207,7 @@ export interface BugFacets {
 export interface BugRepository {
   list(query?: BugQuery): Promise<BugRecord[]>;
   count(query?: BugQuery): Promise<number>;
-  facets(projectId?: string): Promise<BugFacets>;
+  facets(projectId?: string, ownerId?: string): Promise<BugFacets>;
   getDetail(id: string): Promise<BugDetail | null>;
   /** Other bugs on the same page with the same test type and element (shown for review, never merged). */
   related(id: string): Promise<BugRecord[]>;
@@ -215,6 +218,8 @@ export interface BugRepository {
 }
 
 export interface ReportBundleQuery {
+  /** Set only by the owner-scoped provider (trusted identity). */
+  ownerId?: string;
   projectId?: string;
   testRunId?: string;
   status?: ReportBundleRecord["status"];
@@ -246,8 +251,8 @@ export interface ExternalTestRepository {
   /** Creates the run, the execution record and its cases, and enqueues the run, in one transaction. Returns the run id. */
   create(input: NewExternalExecution): Promise<string>;
   get(runId: string): Promise<ExternalExecutionRecord | null>;
-  list(query?: { projectId?: string; limit?: number; offset?: number }): Promise<ExternalExecutionRecord[]>;
-  count(query?: { projectId?: string }): Promise<number>;
+  list(query?: { ownerId?: string; projectId?: string; limit?: number; offset?: number }): Promise<ExternalExecutionRecord[]>;
+  count(query?: { ownerId?: string; projectId?: string }): Promise<number>;
   listCases(runId: string, query?: { status?: ExternalStatus; limit?: number; offset?: number }): Promise<{ rows: ExternalCaseRecord[]; total: number }>;
   getOutputFile(runId: string): Promise<{ storageKey: string; fileName: string } | null>;
 }
@@ -269,10 +274,18 @@ export interface ActivityRepository {
 }
 
 export interface DashboardRepository {
-  getMetrics(): Promise<DashboardMetrics>;
+  getMetrics(ownerId?: string): Promise<DashboardMetrics>;
   /** Daily PASS / FAIL / WARNING counts of executed results, oldest first. Days with no results are omitted. */
-  getResultTrend(days: number): Promise<ResultTrendPoint[]>;
-  getRegressions(limit?: number): Promise<RegressionRecord[]>;
+  getResultTrend(days: number, ownerId?: string): Promise<ResultTrendPoint[]>;
+  getRegressions(limit?: number, ownerId?: string): Promise<RegressionRecord[]>;
+}
+
+/** Resources whose owner can be resolved. `storageKey` covers runs/<runId>/…, reports/<bundleId>/… and projects/<projectId>/…. */
+export type OwnedResource = "project" | "configuration" | "document" | "testRun" | "crawlRun" | "bug" | "reportBundle" | "storageKey";
+
+export interface OwnershipRepository {
+  /** The owner id of the resource, or null when it does not exist or has no owner. */
+  ownerOf(resource: OwnedResource, id: string): Promise<string | null>;
 }
 
 export class DatabaseNotImplementedError extends Error {

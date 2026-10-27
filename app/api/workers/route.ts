@@ -1,7 +1,9 @@
 import { connection } from "next/server";
-import { getDatabase } from "@/lib/database";
+import { routeDb } from "@/lib/server/db";
 
 export async function GET() {
   await connection();
-  return Response.json(await getDatabase().workers.status(), { headers: { "Cache-Control": "no-store" } });
+  const access = routeDb();
+  if (access.denied) return access.denied;
+  return Response.json(await access.db.workers.status(), { headers: { "Cache-Control": "no-store" } });
 }

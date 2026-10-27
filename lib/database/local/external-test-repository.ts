@@ -120,17 +120,31 @@ export class LocalExternalTestRepository implements ExternalTestRepository {
     return row ? this.map([row])[0] : null;
   }
 
-  async list(q: { projectId?: string; limit?: number; offset?: number } = {}): Promise<ExternalExecutionRecord[]> {
-    const where = q.projectId ? "WHERE e.project_id = ?" : "";
+  private scope(q: { ownerId?: string; projectId?: string }) {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (q.projectId) {
+      where.push("e.project_id = ?");
+      params.push(q.projectId);
+    }
+    if (q.ownerId !== undefined) {
+      where.push("e.project_id IN (SELECT id FROM projects WHERE owner_id = ?)");
+      params.push(q.ownerId);
+    }
+    return { sql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
+  }
+
+  async list(q: { ownerId?: string; projectId?: string; limit?: number; offset?: number } = {}): Promise<ExternalExecutionRecord[]> {
+    const { sql, params } = this.scope(q);
     const rows = this.db
-      .prepare(`${this.select} ${where} ORDER BY e.created_at DESC, e.rowid DESC LIMIT ? OFFSET ?`)
-      .all(...(q.projectId ? [q.projectId] : []), Math.min(Math.max(q.limit ?? 20, 1), 200), Math.max(q.offset ?? 0, 0)) as Row[];
+      .prepare(`${this.select} ${sql} ORDER BY e.created_at DESC, e.rowid DESC LIMIT ? OFFSET ?`)
+      .all(...params, Math.min(Math.max(q.limit ?? 20, 1), 200), Math.max(q.offset ?? 0, 0)) as Row[];
     return this.map(rows);
   }
 
-  async count(q: { projectId?: string } = {}): Promise<number> {
-    const where = q.projectId ? "WHERE project_id = ?" : "";
-    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM external_test_executions ${where}`).get(...(q.projectId ? [q.projectId] : [])) as Row).c);
+  async count(q: { ownerId?: string; projectId?: string } = {}): Promise<number> {
+    const { sql, params } = this.scope(q);
+    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM external_test_executions e ${sql}`).get(...params) as Row).c);
   }
 
   async listCases(runId: string, q: { status?: ExternalStatus; limit?: number; offset?: number } = {}): Promise<{ rows: ExternalCaseRecord[]; total: number }> {
