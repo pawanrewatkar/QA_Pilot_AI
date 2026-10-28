@@ -42,7 +42,7 @@ import type {
 } from "../provider";
 import {
   cancelRun,
-  countsFor,
+  countsForSql,
   createRunAndEnqueue,
   LocalCrawlRunRepository,
   LocalPageRepository,
@@ -50,7 +50,7 @@ import {
   LocalTestResultRepository,
   LocalWorkerRepository,
   mapRunSummary,
-  runDetail,
+  runDetailSql,
 } from "./engine-repositories";
 import { LocalBugRepository } from "./bug-repository";
 import { LocalOwnershipRepository, ownedProjectIds, ownedRunIds } from "./ownership";
@@ -58,6 +58,8 @@ import { LocalHistoryRepository } from "./history-repository";
 import { LocalExternalTestRepository } from "./external-test-repository";
 import { LocalReportRepository } from "./report-repository";
 import { getSchemaVersion, openSqlite, runMigrations, type SqliteDatabase } from "./sqlite-client";
+import type { SqlExecutor, SqlValue } from "../sql/executor";
+import { SqliteExecutor } from "../sql/sqlite-executor";
 
 type Row = Record<string, unknown>;
 
@@ -266,91 +268,76 @@ class LocalProjectRepository implements ProjectRepository {
   }
 }
 
-class LocalDocumentRepository implements DocumentRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+/** First repository on SqlExecutor (Phase 3.1b). Same SQL and results as the former direct better-sqlite3 version. */
+export class LocalDocumentRepository implements DocumentRepository {
+  constructor(private readonly sql: SqlExecutor) {}
 
   async listByProject(projectId: string): Promise<DocumentRecord[]> {
-    return (
-      this.db
-        .prepare("SELECT * FROM documents WHERE project_id = ? ORDER BY created_at DESC, rowid DESC")
-        .all(projectId) as Row[]
-    ).map(mapDocument);
+    // `rowid` (insertion order for equal timestamps) is SQLite-only; kept so ordering is unchanged. A PostgreSQL
+    // schema needs an explicit insertion-order column on documents before this query can be shared.
+    return (await this.sql.all<Row>("SELECT * FROM documents WHERE project_id = ? ORDER BY created_at DESC, rowid DESC", [projectId])).map(mapDocument);
   }
 
   async getById(id: string): Promise<DocumentRecord | null> {
-    const row = this.db.prepare("SELECT * FROM documents WHERE id = ?").get(id) as Row | undefined;
+    const row = await this.sql.get<Row>("SELECT * FROM documents WHERE id = ?", [id]);
     return row ? mapDocument(row) : null;
   }
 
   async create(input: NewDocumentRecord): Promise<DocumentRecord> {
     const id = randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO documents (id, project_id, kind, file_name, mime_type, size_bytes, storage_key, checksum_sha256, created_at)
+    await this.sql.run(
+      `INSERT INTO documents (id, project_id, kind, file_name, mime_type, size_bytes, storage_key, checksum_sha256, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        input.projectId,
-        input.kind,
-        input.fileName,
-        input.mimeType,
-        input.sizeBytes,
-        input.storageKey,
-        input.checksumSha256,
-        now(),
-      );
-    return mapDocument(this.db.prepare("SELECT * FROM documents WHERE id = ?").get(id) as Row);
+      [id, input.projectId, input.kind, input.fileName, input.mimeType, input.sizeBytes, input.storageKey, input.checksumSha256, now()],
+    );
+    return mapDocument((await this.sql.get<Row>("SELECT * FROM documents WHERE id = ?", [id])) as Row);
   }
 
   async delete(id: string): Promise<boolean> {
-    return this.db.prepare("DELETE FROM documents WHERE id = ?").run(id).changes > 0;
+    return (await this.sql.run("DELETE FROM documents WHERE id = ?", [id])).changes > 0;
   }
 }
 
-class LocalTestConfigurationRepository implements TestConfigurationRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+/** On SqlExecutor (Phase 3.1c). Same SQL, parameter order and results as the former direct better-sqlite3 version. */
+export class LocalTestConfigurationRepository implements TestConfigurationRepository {
+  constructor(private readonly sql: SqlExecutor) {}
 
   async listByProject(projectId: string): Promise<TestConfiguration[]> {
-    return (
-      this.db
-        .prepare("SELECT * FROM test_configurations WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC")
-        .all(projectId) as Row[]
-    ).map(mapConfiguration);
+    // `rowid` (insertion order for equal timestamps) is SQLite-only; kept so ordering is unchanged. A PostgreSQL
+    // schema needs an explicit insertion-order column on test_configurations before this query can be shared.
+    return (await this.sql.all<Row>("SELECT * FROM test_configurations WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC", [projectId])).map(mapConfiguration);
   }
 
   async getById(id: string): Promise<TestConfiguration | null> {
-    const row = this.db.prepare("SELECT * FROM test_configurations WHERE id = ?").get(id) as Row | undefined;
+    const row = await this.sql.get<Row>("SELECT * FROM test_configurations WHERE id = ?", [id]);
     return row ? mapConfiguration(row) : null;
   }
 
   async create(input: TestConfigurationInput): Promise<TestConfiguration> {
     const id = randomUUID();
     const ts = now();
-    this.db
-      .prepare(
-        `INSERT INTO test_configurations
+    await this.sql.run(
+      `INSERT INTO test_configurations
           (id, project_id, name, scope, selected_page_ids, manual_urls, modules, browsers, viewports,
            report_formats, report_sections, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(id, input.projectId, input.name, input.scope, ...this.serialize(input), ts, ts);
+      [id, input.projectId, input.name, input.scope, ...this.serialize(input), ts, ts],
+    );
     return (await this.getById(id))!;
   }
 
   async update(id: string, input: TestConfigurationInput): Promise<TestConfiguration | null> {
-    const result = this.db
-      .prepare(
-        `UPDATE test_configurations SET name = ?, scope = ?, selected_page_ids = ?, manual_urls = ?, modules = ?,
+    const result = await this.sql.run(
+      `UPDATE test_configurations SET name = ?, scope = ?, selected_page_ids = ?, manual_urls = ?, modules = ?,
            browsers = ?, viewports = ?, report_formats = ?, report_sections = ?, updated_at = ?
          WHERE id = ? AND project_id = ?`,
-      )
-      .run(input.name, input.scope, ...this.serialize(input), now(), id, input.projectId);
+      [input.name, input.scope, ...this.serialize(input), now(), id, input.projectId],
+    );
     return result.changes === 0 ? null : this.getById(id);
   }
 
   async delete(id: string): Promise<boolean> {
-    return this.db.prepare("DELETE FROM test_configurations WHERE id = ?").run(id).changes > 0;
+    return (await this.sql.run("DELETE FROM test_configurations WHERE id = ?", [id])).changes > 0;
   }
 
   private serialize(input: TestConfigurationInput) {
@@ -366,9 +353,9 @@ class LocalTestConfigurationRepository implements TestConfigurationRepository {
   }
 }
 
-function projectScope(options: ListOptions, alias: string, ownerColumn?: string): { clause: string; params: unknown[] } {
+function projectScope(options: ListOptions, alias: string, ownerColumn?: string): { clause: string; params: SqlValue[] } {
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: SqlValue[] = [];
   if (options.projectId) {
     where.push(`${alias}.project_id = ?`);
     params.push(options.projectId);
@@ -380,29 +367,39 @@ function projectScope(options: ListOptions, alias: string, ownerColumn?: string)
   return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
 }
 
-class LocalTestRunRepository implements TestRunRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+/**
+ * Partially on SqlExecutor:
+ * - `list` and `getById` (Phase 3.1e), `getDetail` and `countsByRun` (Phase 3.1i) use `sql` (same SQL, parameter
+ *   order and results as before);
+ * - `createAndEnqueue` and `requestCancel` still call the engine helpers with the raw connection `db`: both run a
+ *   synchronous SQLite transaction (cancelling a pending run also cancels its queued job atomically). They move in
+ *   the transactional phase.
+ */
+export class LocalTestRunRepository implements TestRunRepository {
+  constructor(
+    private readonly db: SqliteDatabase,
+    private readonly sql: SqlExecutor,
+  ) {}
 
   async list(options: ListOptions = {}): Promise<TestRun[]> {
     const { clause, params } = projectScope(options, "r");
-    const rows = this.db
-      .prepare(
-        `SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id
+    // `r.rowid` (insertion order for equal timestamps) is SQLite-only; kept so ordering is unchanged. A PostgreSQL
+    // schema needs an explicit insertion-order column on test_runs before this query can be shared.
+    const rows = await this.sql.all<Row>(
+      `SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id
          ${clause} ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?`,
-      )
-      .all(...params, clampLimit(options.limit)) as Row[];
+      [...params, clampLimit(options.limit)],
+    );
     return rows.map(mapRunSummary);
   }
 
   async getById(id: string): Promise<TestRun | null> {
-    const row = this.db
-      .prepare(`SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?`)
-      .get(id) as Row | undefined;
+    const row = await this.sql.get<Row>(`SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?`, [id]);
     return row ? mapRunSummary(row) : null;
   }
 
   async getDetail(id: string): Promise<TestRunDetail | null> {
-    return runDetail(this.db, id);
+    return runDetailSql(this.sql, id);
   }
 
   async createAndEnqueue(input: NewTestRun): Promise<TestRun> {
@@ -414,12 +411,13 @@ class LocalTestRunRepository implements TestRunRepository {
   }
 
   async countsByRun(runIds: string[]): Promise<Record<string, ResultStatusCounts>> {
-    return countsFor(this.db, runIds);
+    return countsForSql(this.sql, runIds);
   }
 }
 
-class LocalActivityRepository implements ActivityRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+/** On SqlExecutor (Phase 3.1d). Same SQL, parameter order and results as the former direct better-sqlite3 version. */
+export class LocalActivityRepository implements ActivityRepository {
+  constructor(private readonly sql: SqlExecutor) {}
 
   private map(row: Row): ActivityRecord {
     return {
@@ -436,34 +434,37 @@ class LocalActivityRepository implements ActivityRepository {
 
   async record(entry: NewActivity): Promise<ActivityRecord> {
     const id = randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO activity_log (id, project_id, entity_type, entity_id, action, summary, created_at, owner_id)
+    await this.sql.run(
+      `INSERT INTO activity_log (id, project_id, entity_type, entity_id, action, summary, created_at, owner_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT owner_id FROM projects WHERE id = ?)))`,
-      )
-      .run(id, entry.projectId, entry.entityType, entry.entityId, entry.action, entry.summary, now(), entry.ownerId ?? null, entry.projectId);
-    const row = this.db
-      .prepare(
-        `SELECT a.*, p.name AS project_name FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id WHERE a.id = ?`,
-      )
-      .get(id) as Row;
+      [id, entry.projectId, entry.entityType, entry.entityId, entry.action, entry.summary, now(), entry.ownerId ?? null, entry.projectId],
+    );
+    const row = (await this.sql.get<Row>(
+      `SELECT a.*, p.name AS project_name FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id WHERE a.id = ?`,
+      [id],
+    )) as Row;
     return this.map(row);
   }
 
   async list(options: ListOptions = {}): Promise<ActivityRecord[]> {
     const { clause, params } = projectScope(options, "a", "a.owner_id");
-    const rows = this.db
-      .prepare(
-        `SELECT a.*, p.name AS project_name FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id
+    // `a.rowid` (insertion order for equal timestamps) is SQLite-only; kept so ordering is unchanged. A PostgreSQL
+    // schema needs an explicit insertion-order column on activity_log before this query can be shared.
+    const rows = await this.sql.all<Row>(
+      `SELECT a.*, p.name AS project_name FROM activity_log a LEFT JOIN projects p ON p.id = a.project_id
          ${clause} ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`,
-      )
-      .all(...params, clampLimit(options.limit)) as Row[];
+      [...params, clampLimit(options.limit)],
+    );
     return rows.map((r) => this.map(r));
   }
 }
 
-class LocalDashboardRepository implements DashboardRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+/**
+ * On SqlExecutor: `getResultTrend` (Phase 3.1f), `getMetrics` (Phase 3.1g) and `getRegressions` (Phase 3.1h) use
+ * `sql` (same SQL, parameters and results as before).
+ */
+export class LocalDashboardRepository implements DashboardRepository {
+  constructor(private readonly sql: SqlExecutor) {}
 
   async getMetrics(ownerId?: string): Promise<DashboardMetrics> {
     // With an owner, every count is restricted to that owner's projects (each fragment binds the owner id once).
@@ -485,7 +486,7 @@ class LocalDashboardRepository implements DashboardRepository {
           (SELECT COUNT(*) FROM bugs WHERE severity = 'HIGH'${and(ownedProjectIds("project_id"))}) AS high_bugs,
           (SELECT COUNT(*) FROM bugs WHERE severity = 'MEDIUM'${and(ownedProjectIds("project_id"))}) AS medium_bugs,
           (SELECT COUNT(*) FROM bugs WHERE severity = 'LOW'${and(ownedProjectIds("project_id"))}) AS low_bugs`;
-    const row = this.db.prepare(sql).get(...(scoped ? Array(14).fill(ownerId) : [])) as Row;
+    const row = (await this.sql.get<Row>(sql, scoped ? Array(14).fill(ownerId) : [])) as Row;
     return {
       totalProjects: num(row.total_projects),
       totalTestRuns: num(row.total_test_runs),
@@ -506,24 +507,27 @@ class LocalDashboardRepository implements DashboardRepository {
 
   async getResultTrend(days: number, ownerId?: string): Promise<ResultTrendPoint[]> {
     const since = new Date(Date.now() - Math.max(1, days) * 86_400_000).toISOString();
-    const rows = this.db
-      .prepare(
-        `SELECT substr(executed_at, 1, 10) AS day,
-           SUM(status = 'PASS') AS passed, SUM(status = 'FAIL') AS failed, SUM(status = 'WARNING') AS warnings
+    // `SUM(CASE …)` rather than `SUM(status = '…')`: PostgreSQL cannot SUM a boolean (Phase 3.3a); same counts on SQLite.
+    const rows = await this.sql.all<Row>(
+      `SELECT substr(executed_at, 1, 10) AS day,
+           SUM(CASE WHEN status = 'PASS' THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN status = 'FAIL' THEN 1 ELSE 0 END) AS failed,
+           SUM(CASE WHEN status = 'WARNING' THEN 1 ELSE 0 END) AS warnings
          FROM test_results
          WHERE executed_at IS NOT NULL AND executed_at >= ? AND status IN ('PASS','FAIL','WARNING')${ownerId !== undefined ? ` AND ${ownedRunIds("test_run_id")}` : ""}
          GROUP BY day ORDER BY day ASC`,
-      )
-      .all(since, ...(ownerId !== undefined ? [ownerId] : [])) as Row[];
+      [since, ...(ownerId !== undefined ? [ownerId] : [])],
+    );
     return rows.map((r) => ({ day: String(r.day), passed: num(r.passed), failed: num(r.failed), warnings: num(r.warnings) }));
   }
 
   async getRegressions(limit = 20, ownerId?: string): Promise<RegressionRecord[]> {
     // Compares each project's two most recent COMPLETED runs. Test cases are matched by
     // identity (module + title + page) because cases may be regenerated per run.
-    const rows = this.db
-      .prepare(
-        `WITH ranked AS (
+    // Ties on the completion time are broken by `rowid DESC` (the later-inserted run counts as newer). `rowid` is
+    // SQLite's implicit row number (test_runs has a TEXT primary key, so it is not an alias of `id`); PostgreSQL has
+    // no equivalent, so a shared version needs an explicit, stored tie-break (e.g. an insertion sequence column).
+    const rows = await this.sql.all<Row>(
+      `WITH ranked AS (
            SELECT id, project_id,
              ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY COALESCE(completed_at, created_at) DESC, rowid DESC) AS rn
            FROM test_runs WHERE status = 'COMPLETED'${ownerId !== undefined ? ` AND ${ownedProjectIds("project_id")}` : ""}
@@ -540,8 +544,8 @@ class LocalDashboardRepository implements DashboardRepository {
            AND ptc.module = ltc.module AND ptc.title = ltc.title AND COALESCE(ptc.page_id, '') = COALESCE(ltc.page_id, '')
          WHERE latest.rn = 1
          LIMIT ?`,
-      )
-      .all(...(ownerId !== undefined ? [ownerId] : []), clampLimit(limit)) as Row[];
+      [...(ownerId !== undefined ? [ownerId] : []), clampLimit(limit)],
+    );
     return rows.map((r) => ({
       projectId: String(r.project_id),
       projectName: String(r.project_name),
@@ -575,25 +579,28 @@ export class LocalDatabaseProvider implements DatabaseProvider {
 
   /** Exposed for the worker and tests; app code should go through the repositories. */
   readonly sqlite: SqliteDatabase;
+  /** Async, database-neutral access to the same connection (repositories are moved onto it step by step). */
+  readonly sql: SqlExecutor;
 
   constructor(db: SqliteDatabase) {
     this.sqlite = db;
+    this.sql = new SqliteExecutor(db);
     this.projects = new LocalProjectRepository(db);
-    this.documents = new LocalDocumentRepository(db);
-    this.testConfigurations = new LocalTestConfigurationRepository(db);
-    this.testRuns = new LocalTestRunRepository(db);
-    this.testResults = new LocalTestResultRepository(db);
+    this.documents = new LocalDocumentRepository(this.sql);
+    this.testConfigurations = new LocalTestConfigurationRepository(this.sql);
+    this.testRuns = new LocalTestRunRepository(db, this.sql);
+    this.testResults = new LocalTestResultRepository(db, this.sql);
     this.crawlRuns = new LocalCrawlRunRepository(db);
-    this.workers = new LocalWorkerRepository(db);
+    this.workers = new LocalWorkerRepository(this.sql);
     this.pages = new LocalPageRepository(db);
-    this.testCases = new LocalTestCaseRepository(db);
+    this.testCases = new LocalTestCaseRepository(this.sql);
     this.bugs = new LocalBugRepository(db);
     this.reports = new LocalReportRepository(db);
-    this.history = new LocalHistoryRepository(db);
+    this.history = new LocalHistoryRepository(db, this.sql);
     this.externalTests = new LocalExternalTestRepository(db);
-    this.activity = new LocalActivityRepository(db);
-    this.dashboard = new LocalDashboardRepository(db);
-    this.ownership = new LocalOwnershipRepository(db);
+    this.activity = new LocalActivityRepository(this.sql);
+    this.dashboard = new LocalDashboardRepository(this.sql);
+    this.ownership = new LocalOwnershipRepository(this.sql);
   }
 
   /** Opens the database file and applies pending migrations. */

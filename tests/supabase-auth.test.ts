@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ExcelJS from "exceljs";
 import { GENERIC } from "@/lib/auth/messages";
+import { LOCAL_PATH_UNAVAILABLE } from "@/lib/external-tests/sources";
 import { makeTempDir } from "./helpers";
 
 /**
@@ -56,6 +59,9 @@ const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const tempDir = makeTempDir();
 process.env.DATABASE_PATH = path.join(tempDir, "auth.db");
 process.env.STORAGE_PATH = path.join(tempDir, "storage");
+// Shared "local file path" folder holding a valid workbook, so a successful read would be visible.
+const sharedDir = path.join(tempDir, "test-cases");
+process.env.EXTERNAL_TEST_CASES_DIR = sharedDir;
 
 function useEnv(values: Record<string, string | undefined>) {
   for (const k of ENV_KEYS) delete process.env[k];
@@ -463,5 +469,86 @@ describe("proxy", () => {
     expect(res.status).toBe(307);
     expect(res.cookies.get("sb-example-ref-auth-token")?.value).toBe("");
     expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+});
+
+describe("shared server folder for workbooks (EXTERNAL_TEST_CASES_DIR)", () => {
+  const draftsDir = path.join(tempDir, "storage", "external-drafts");
+  const loadFromFolder = async (relPath: string) => {
+    const { loadWorkbookAction } = await import("@/app/external-test-cases/actions");
+    const fd = new FormData();
+    fd.set("sourceKind", "LOCAL_PATH");
+    fd.set("path", relPath);
+    return loadWorkbookAction(fd);
+  };
+
+  beforeEach(async () => {
+    fs.rmSync(draftsDir, { recursive: true, force: true });
+    fs.mkdirSync(sharedDir, { recursive: true });
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Cases").addRows([["TC ID", "Scenario", "Steps", "Expected"], ["TC01", "Home", "Open the home page", "Home page loads"]]);
+    fs.writeFileSync(path.join(sharedDir, "cases.xlsx"), new Uint8Array(await wb.xlsx.writeBuffer()));
+  });
+
+  it("is only available when AUTH_PROVIDER is exactly local", async () => {
+    const { sharedWorkbookFolder } = await import("@/lib/external-tests/shared-folder");
+    expect(sharedWorkbookFolder({ EXTERNAL_TEST_CASES_DIR: sharedDir })).toBe(sharedDir); // default provider
+    expect(sharedWorkbookFolder({ AUTH_PROVIDER: "local", EXTERNAL_TEST_CASES_DIR: sharedDir })).toBe(sharedDir);
+    for (const provider of ["supabase", "LOCAL", "none", " supabase "]) {
+      expect(sharedWorkbookFolder({ AUTH_PROVIDER: provider, EXTERNAL_TEST_CASES_DIR: sharedDir }), provider).toBeNull();
+    }
+  });
+
+  it("refuses to read it for a signed-in, permitted Supabase user, without revealing the server path", async () => {
+    signedInAs(ALICE);
+    for (const p of ["cases.xlsx", "./cases.xlsx", "../test-cases/cases.xlsx", path.join(sharedDir, "cases.xlsx")]) {
+      const res = await loadFromFolder(p);
+      expect(res, p).toEqual({ ok: false, error: LOCAL_PATH_UNAVAILABLE });
+    }
+    expect(LOCAL_PATH_UNAVAILABLE).not.toContain(sharedDir);
+    expect(fs.existsSync(draftsDir)).toBe(false); // nothing copied into storage
+    expect(fs.readdirSync(sharedDir)).toEqual(["cases.xlsx"]); // nothing written to or removed from the folder
+  });
+
+  it("redirects signed-out Supabase requests to /login before any file access", async () => {
+    expect(await redirectTarget(() => loadFromFolder("cases.xlsx"))).toBe("/login");
+    expect(fs.existsSync(draftsDir)).toBe(false);
+  });
+
+  it("keeps working in local mode", async () => {
+    useEnv({});
+    const res = await loadFromFolder("cases.xlsx");
+    expect(res).toMatchObject({ ok: true, value: { sourceKind: "LOCAL_PATH", sourceName: "cases.xlsx" } });
+    expect(fs.existsSync(draftsDir)).toBe(true);
+    // Path traversal is still refused in local mode.
+    expect(await loadFromFolder("../auth.db")).toMatchObject({ ok: false });
+  });
+
+  it("has no other code path that reads, writes, lists or deletes in the folder", () => {
+    const files: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(ts|tsx)$/.test(e.name)) files.push(p);
+      }
+    };
+    for (const d of ["app", "components", "lib", "worker"]) walk(path.resolve(d));
+    const rel = (f: string) => path.relative(process.cwd(), f).split(path.sep).join("/");
+    const using = (re: RegExp) => files.filter((f) => re.test(fs.readFileSync(f, "utf8"))).map(rel).sort();
+    // The folder setting is read in exactly one place: the mode-aware helper.
+    expect(using(/\.EXTERNAL_TEST_CASES_DIR\b/)).toEqual(["lib/external-tests/shared-folder.ts"]);
+    // The folder reader is constructed in one place, right after the disabled check.
+    expect(using(/new LocalPathSourceProvider\(/)).toEqual(["lib/services/external-tests.ts"]);
+    expect(fs.readFileSync(path.resolve("lib/services/external-tests.ts"), "utf8")).toMatch(/if \(!deps\.localDir\) throw new SourceError\(LOCAL_PATH_UNAVAILABLE\);\s+return new LocalPathSourceProvider\(deps\.localDir/);
+    // The reader only stats and reads; it never writes, lists or deletes.
+    const sources = fs.readFileSync(path.resolve("lib/external-tests/sources.ts"), "utf8");
+    expect(sources.match(/fs\.\w+\(/g)?.sort()).toEqual(["fs.readFile(", "fs.stat("]);
+    // The page and actions take the folder only from the mode-aware helper.
+    for (const f of ["app/external-test-cases/page.tsx", "app/external-test-cases/actions.ts"]) {
+      const src = fs.readFileSync(path.resolve(f), "utf8");
+      expect(src, f).toMatch(/sharedWorkbookFolder\(\)/);
+      expect(src, f).not.toMatch(/resolveFromRoot/);
+    }
   });
 });

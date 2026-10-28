@@ -4,7 +4,7 @@ import { normalizeCrawlUrl } from "@/lib/crawler/normalize";
 import type { DatabaseProvider } from "@/lib/database/provider";
 import { detectMapping, validateMapping, type MappingValidation } from "@/lib/external-tests/mapping";
 import { planResultColumns } from "@/lib/external-tests/result-columns";
-import { GoogleDriveLinkSourceProvider, LocalPathSourceProvider, SourceError, UploadSourceProvider, type WorkbookFile } from "@/lib/external-tests/sources";
+import { GoogleDriveLinkSourceProvider, LOCAL_PATH_UNAVAILABLE, LocalPathSourceProvider, SourceError, UploadSourceProvider, type WorkbookFile } from "@/lib/external-tests/sources";
 import { CASE_FIELDS, type ColumnMapping, type OutputMode, type SheetColumn, type SourceKind } from "@/lib/external-tests/types";
 import { loadWorkbook, readSheet, toCases, WorkbookError, worksheetNames } from "@/lib/external-tests/workbook";
 import { fetchUrl } from "@/lib/net/http";
@@ -24,8 +24,8 @@ export interface ExternalTestDeps {
   ownerId: string;
   storage: StorageProvider;
   maxUploadBytes: number;
-  /** Folder for local-path sources (EXTERNAL_TEST_CASES_DIR). */
-  localDir: string;
+  /** Folder for local-path sources (EXTERNAL_TEST_CASES_DIR), or null when that shared folder is disabled (lib/external-tests/shared-folder.ts). */
+  localDir: string | null;
   /** Overridable for tests. */
   fetcher?: typeof fetchUrl;
 }
@@ -73,6 +73,8 @@ async function loadSource(deps: ExternalTestDeps, input: SourceInput): Promise<W
     case "UPLOAD":
       return new UploadSourceProvider(deps.maxUploadBytes).load({ fileName: input.fileName, bytes: input.bytes });
     case "LOCAL_PATH":
+      // Refused before touching the disk; never falls back to another folder.
+      if (!deps.localDir) throw new SourceError(LOCAL_PATH_UNAVAILABLE);
       return new LocalPathSourceProvider(deps.localDir, deps.maxUploadBytes).load(input.path);
     case "GOOGLE_DRIVE":
       return new GoogleDriveLinkSourceProvider(deps.maxUploadBytes, deps.fetcher).load(input.link);

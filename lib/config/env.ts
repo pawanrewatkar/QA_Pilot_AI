@@ -8,6 +8,8 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_PROVIDER: z.enum(["local", "supabase"]).default("local"),
   DATABASE_PATH: z.string().min(1).default("./data/qa-pilot.db"),
+  /** PostgreSQL connection string, used only when DATABASE_PROVIDER=supabase. Contains a password: never log it. */
+  DATABASE_URL: z.string().optional(),
   STORAGE_PROVIDER: z.enum(["local"]).default("local"),
   STORAGE_PATH: z.string().min(1).default("./data/storage"),
   MAX_UPLOAD_MB: z.coerce.number().positive().max(100).default(10),

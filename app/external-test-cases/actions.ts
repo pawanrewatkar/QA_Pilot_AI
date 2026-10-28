@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { readEnv, resolveFromRoot } from "@/lib/config/env";
+import { readEnv } from "@/lib/config/env";
+import { sharedWorkbookFolder } from "@/lib/external-tests/shared-folder";
 import { actionDb, actionIdentity } from "@/lib/server/db";
 import type { ColumnMapping, OutputMode, SourceKind } from "@/lib/external-tests/types";
 import { inspectDraftSheet, inspectSource, startExternalExecution, type DraftInspection, type ExternalTestDeps, type Result, type SheetInspection, type SourceInput } from "@/lib/services/external-tests";
@@ -13,7 +14,7 @@ import { getStorage } from "@/lib/storage";
 async function deps(): Promise<ExternalTestDeps> {
   const env = readEnv();
   // Owner-scoped data access; drafts are stored per owner so one identity can never open another's upload.
-  return { db: await actionDb(), ownerId: (await actionIdentity()).ownerId, storage: getStorage(), maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024, localDir: resolveFromRoot(env.EXTERNAL_TEST_CASES_DIR) };
+  return { db: await actionDb(), ownerId: (await actionIdentity()).ownerId, storage: getStorage(), maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024, localDir: sharedWorkbookFolder() };
 }
 
 /** Step 1: load the workbook from an upload, a local path or a Google Drive link. */

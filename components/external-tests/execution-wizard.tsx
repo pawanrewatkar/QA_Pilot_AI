@@ -44,7 +44,7 @@ function Section({ n, title, description, children, disabled }: { n: number; tit
   );
 }
 
-export function ExecutionWizard({ projects, localDir, maxUploadMb, today }: { projects: { id: string; name: string; websiteUrl: string }[]; localDir: string; maxUploadMb: number; today: string }) {
+export function ExecutionWizard({ projects, localDir, maxUploadMb, today }: { projects: { id: string; name: string; websiteUrl: string }[]; localDir: string | null; maxUploadMb: number; today: string }) {
   const uid = useId();
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -162,7 +162,8 @@ export function ExecutionWizard({ projects, localDir, maxUploadMb, today }: { pr
       <Section n={2} title="Test case source" description={`Excel workbooks (.xlsx / .xlsm), up to ${maxUploadMb} MB. The original file is never modified.`}>
         <div className="space-y-4">
           <div role="radiogroup" aria-label="Test case source" className="flex flex-wrap gap-2">
-            {SOURCES.map((s) => (
+            {/* The shared server folder is offered only in local mode (localDir is null otherwise). */}
+            {SOURCES.filter((s) => s.id !== "LOCAL_PATH" || localDir).map((s) => (
               <Button key={s.id} type="button" role="radio" aria-checked={source === s.id} variant={source === s.id ? "default" : "outline"} onClick={() => setSource(s.id)}>
                 <s.icon /> {s.label}
               </Button>

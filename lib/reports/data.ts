@@ -5,6 +5,7 @@ import { LocalBugRepository } from "@/lib/database/local/bug-repository";
 import { LocalTestResultRepository, runDetail } from "@/lib/database/local/engine-repositories";
 import type { DetailRowRecord } from "@/lib/database/provider";
 import type { SqliteDatabase } from "@/lib/database/local/sqlite-client";
+import { SqliteExecutor } from "@/lib/database/sql/sqlite-executor";
 import type { BugDetail, ResultStatusCounts, TestResultRecord, TestResultStatus } from "@/types";
 import { redactRecord, redactText } from "./redact";
 
@@ -132,7 +133,9 @@ export async function loadReportData(db: SqliteDatabase, runId: string): Promise
   if (!detail) throw new Error(`Test run ${runId} not found`);
   const project = db.prepare("SELECT id, name, website_url FROM projects WHERE id = ?").get(detail.projectId) as Row;
 
-  const repo = new LocalTestResultRepository(db);
+  // Its own executor over the same connection (only the raw-connection methods are used here). It does not share the
+  // provider executor's transaction queue, so revisit before executor transactions are used in production code.
+  const repo = new LocalTestResultRepository(db, new SqliteExecutor(db));
   const raw: TestResultRecord[] = [];
   for (let offset = 0; ; offset += 2000) {
     const batch = await repo.listByRun(runId, { limit: 2000, offset });

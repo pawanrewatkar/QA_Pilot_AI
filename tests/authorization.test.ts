@@ -73,6 +73,41 @@ describe("owner-scoped data access", () => {
   });
   afterEach(async () => base.close());
 
+  it("resolves owners through the async executor exactly as direct SQLite queries do", async () => {
+    // Reference: the pre-executor implementation (direct better-sqlite3 lookups along the parent chain).
+    const direct = (sql: string, id: string) => (base.sqlite.prepare(sql).get(id) as { owner_id: string | null } | undefined)?.owner_id ?? null;
+    const viaRun = "SELECT p.owner_id FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?";
+    const viaBundle = "SELECT p.owner_id FROM report_bundles b JOIN projects p ON p.id = b.project_id WHERE b.id = ?";
+    const viaProject = "SELECT owner_id FROM projects WHERE id = ?";
+    const cases = (s: typeof a) =>
+      [
+        ["project", s.project.id, viaProject],
+        ["configuration", s.config.id, "SELECT p.owner_id FROM test_configurations c JOIN projects p ON p.id = c.project_id WHERE c.id = ?"],
+        ["document", s.document.id, "SELECT p.owner_id FROM documents d JOIN projects p ON p.id = d.project_id WHERE d.id = ?"],
+        ["testRun", s.run.id, viaRun],
+        ["testRun", s.externalRunId, viaRun],
+        ["crawlRun", s.crawl.id, "SELECT p.owner_id FROM crawl_runs c JOIN projects p ON p.id = c.project_id WHERE c.id = ?"],
+        ["bug", s.bug.id, "SELECT p.owner_id FROM bugs b JOIN projects p ON p.id = b.project_id WHERE b.id = ?"],
+        ["reportBundle", s.bundle.id, viaBundle],
+        ["storageKey", s.screenshotKey, viaRun, s.run.id],
+        ["storageKey", `reports/${s.bundle.id}/report.pdf`, viaBundle, s.bundle.id],
+        ["storageKey", s.document.storageKey, viaProject, s.project.id],
+      ] as const;
+    for (const [s, owner] of [[a, "user-alice"], [b, "user-bob"]] as const) {
+      for (const [kind, id, sql, keyId] of cases(s)) {
+        const got = await base.ownership.ownerOf(kind, id);
+        expect(got, `${kind} ${id}`).toBe(owner);
+        expect(got, `${kind} ${id} parity`).toBe(direct(sql, keyId ?? id));
+      }
+    }
+    // Unknown ids and keys without an owning resource resolve to no owner.
+    for (const kind of ["project", "configuration", "document", "testRun", "crawlRun", "bug", "reportBundle"] as const) {
+      expect(await base.ownership.ownerOf(kind, "00000000-0000-0000-0000-000000000000")).toBeNull();
+      expect(await base.ownership.ownerOf(kind, "")).toBeNull();
+    }
+    for (const key of ["runs", "external-drafts/abc/x.xlsx", "other/x", `runs/missing-run/x.png`]) expect(await base.ownership.ownerOf("storageKey", key)).toBeNull();
+  });
+
   it("lets an owner read all of their own resources", async () => {
     expect((await alice.projects.list()).map((p) => p.id)).toEqual([a.project.id]);
     expect(await alice.projects.getById(a.project.id)).not.toBeNull();

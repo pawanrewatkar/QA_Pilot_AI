@@ -494,7 +494,7 @@ Phase 7 so far is preparation only. No database migration, no deleted files, no 
 
 ## 11. Authentication (Step 1 ownership + Step 2 Supabase Auth; 2026-10-27)
 
-Branch `feat/supabase-auth`, uncommitted. Step 1 is committed in `efb5d55`. Nothing has been deployed, and data stays in SQLite.
+Branch `feat/supabase-auth`. Step 1 is committed in `efb5d55` (on `origin/main`); Step 2 is committed locally in `910587e` (not pushed). Nothing has been deployed, and data stays in SQLite.
 
 - **Identity.** `lib/auth/identity.ts` decides the identity, in one of two modes.
   - **Local** (`AUTH_PROVIDER=local`, the default): the owner is `local:default`. Local mode is refused on Vercel, and a production build needs `QA_PILOT_LOCAL_MODE=true`.

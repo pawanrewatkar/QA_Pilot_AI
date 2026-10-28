@@ -10,7 +10,8 @@ import { WorkerStatusBanner } from "@/components/shared/worker-status";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { readEnv, resolveFromRoot } from "@/lib/config/env";
+import { readEnv } from "@/lib/config/env";
+import { sharedWorkbookFolder } from "@/lib/external-tests/shared-folder";
 import { requestDb } from "@/lib/server/db";
 import { formatDateTime } from "@/lib/utils";
 
@@ -103,7 +104,7 @@ export default async function ExternalTestCasesPage({ searchParams }: PageProps<
       <h2 className="text-lg font-semibold">New execution</h2>
       <ExecutionWizard
         projects={projects.map((p) => ({ id: p.id, name: p.name, websiteUrl: p.websiteUrl }))}
-        localDir={resolveFromRoot(env.EXTERNAL_TEST_CASES_DIR)}
+        localDir={sharedWorkbookFolder()}
         maxUploadMb={env.MAX_UPLOAD_MB}
         today={new Date().toISOString().slice(0, 10)}
       />

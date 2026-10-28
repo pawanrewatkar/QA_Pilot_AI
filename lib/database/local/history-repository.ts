@@ -9,6 +9,7 @@ import {
 } from "@/lib/regression/compare";
 import type { BugSeverity, HistoryQuery, RunHistoryRecord, TestResultStatus } from "@/types";
 import type { HistoryRepository } from "../provider";
+import type { SqlExecutor, SqlValue } from "../sql/executor";
 import { mapBug } from "./bug-repository";
 import { countsFor } from "./engine-repositories";
 import type { SqliteDatabase } from "./sqlite-client";
@@ -27,8 +28,16 @@ const RUN_SELECT = `SELECT r.*, p.name AS project_name, p.website_url,
   (SELECT AVG(x.lcp_ms) FROM performance_results x WHERE x.test_run_id = r.id AND x.lcp_ms IS NOT NULL) AS lcp
   FROM test_runs r JOIN projects p ON p.id = r.project_id`;
 
+/**
+ * Partially on SqlExecutor: `countRuns` (Phase 3.1m), the run query of `listRuns` (Phase 3.1n) and `comparableRuns`
+ * (Phase 3.1p) use `sql` (same SQL, parameters and results as before); the other methods, and `map` (which
+ * `listRuns` and `getRun` share), still use the raw connection `db`. Both must be the same connection.
+ */
 export class LocalHistoryRepository implements HistoryRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(
+    private readonly db: SqliteDatabase,
+    private readonly sql: SqlExecutor,
+  ) {}
 
   private where(q: HistoryQuery) {
     const where: string[] = [];
@@ -48,7 +57,9 @@ export class LocalHistoryRepository implements HistoryRepository {
     const search = q.search?.trim();
     if (search) {
       const p = likePattern(search);
-      where.push(`(r.name LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\' OR p.website_url LIKE ? ESCAPE '\\')`);
+      // SQLite's LIKE ignores case (ASCII letters); PostgreSQL's does not, so it uses ILIKE (Phase 3.3a).
+      const like = this.sql.dialect === "postgres" ? "ILIKE" : "LIKE";
+      where.push(`(r.name ${like} ? ESCAPE '\\' OR p.name ${like} ? ESCAPE '\\' OR p.website_url ${like} ? ESCAPE '\\')`);
       params.push(p, p, p);
     }
     return { sql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
@@ -102,13 +113,21 @@ export class LocalHistoryRepository implements HistoryRepository {
   async listRuns(q: HistoryQuery = {}): Promise<RunHistoryRecord[]> {
     const { sql, params } = this.where(q);
     const limit = Math.min(Math.max(q.limit ?? 25, 1), 200);
-    const rows = this.db.prepare(`${RUN_SELECT} ${sql} ORDER BY r.created_at DESC, r.rowid DESC LIMIT ? OFFSET ?`).all(...params, limit, Math.max(0, q.offset ?? 0)) as Row[];
+    // `r.rowid` (insertion order for equal timestamps) is SQLite-only; kept so ordering is unchanged. A PostgreSQL schema
+    // needs an explicit insertion-order column on test_runs (see the test runs repository).
+    const rows = await this.sql.all<Row>(`${RUN_SELECT} ${sql} ORDER BY r.created_at DESC, r.rowid DESC LIMIT ? OFFSET ?`, [
+      ...(params as SqlValue[]),
+      limit,
+      Math.max(0, q.offset ?? 0),
+    ]);
     return this.map(rows);
   }
 
   async countRuns(q: HistoryQuery = {}): Promise<number> {
     const { sql, params } = this.where(q);
-    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM test_runs r JOIN projects p ON p.id = r.project_id ${sql}`).get(...params) as Row).c);
+    // `where` only pushes strings; the cast narrows its `unknown[]` for the executor without changing the helper.
+    const row = (await this.sql.get<Row>(`SELECT COUNT(*) AS c FROM test_runs r JOIN projects p ON p.id = r.project_id ${sql}`, params as SqlValue[])) as Row;
+    return Number(row.c);
   }
 
   async getRun(id: string): Promise<RunHistoryRecord | null> {
@@ -129,10 +148,14 @@ export class LocalHistoryRepository implements HistoryRepository {
   }
 
   async comparableRuns(runId: string): Promise<{ id: string; name: string | null; status: string; createdAt: string }[]> {
-    const run = this.db.prepare("SELECT project_id FROM test_runs WHERE id = ?").get(runId) as Row | undefined;
+    const run = await this.sql.get<Row>("SELECT project_id FROM test_runs WHERE id = ?", [runId]);
     if (!run) return [];
+    // No tie-break: the order of runs sharing a created_at is not defined.
     return (
-      this.db.prepare(`SELECT id, name, status, created_at FROM test_runs WHERE project_id = ? AND id != ? AND status IN ${FINISHED} ORDER BY created_at DESC LIMIT 100`).all(run.project_id, runId) as Row[]
+      await this.sql.all<Row>(`SELECT id, name, status, created_at FROM test_runs WHERE project_id = ? AND id != ? AND status IN ${FINISHED} ORDER BY created_at DESC LIMIT 100`, [
+        run.project_id as SqlValue,
+        runId,
+      ])
     ).map((r) => ({ id: String(r.id), name: str(r.name), status: String(r.status), createdAt: String(r.created_at) }));
   }
 

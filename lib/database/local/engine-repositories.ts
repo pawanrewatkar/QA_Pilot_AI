@@ -24,6 +24,7 @@ import type {
   TestResultRepository,
   WorkerRepository,
 } from "../provider";
+import type { SqlExecutor, SqlValue } from "../sql/executor";
 import { ownedProjectIds } from "./ownership";
 import type { SqliteDatabase } from "./sqlite-client";
 
@@ -262,13 +263,29 @@ export class LocalCrawlRunRepository implements CrawlRunRepository {
 
 // ---------------------------------------------------------------- test runs (write + detail)
 
+// The read helpers below exist in two forms: synchronous on the raw connection (still used by reports and history)
+// and async on SqlExecutor (used by the test runs repository). Both share the SQL text and the mapping.
+const RUN_COUNTS_SQL = "SELECT status, COUNT(*) AS c FROM test_results WHERE test_run_id = ? GROUP BY status";
+const RUN_DETAIL_SQL = "SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?";
+
 export function countsFor(db: SqliteDatabase, runIds: string[]): Record<string, ResultStatusCounts> {
   const out: Record<string, ResultStatusCounts> = {};
   for (const id of runIds) out[id] = emptyCounts();
   if (!runIds.length) return out;
-  const stmt = db.prepare("SELECT status, COUNT(*) AS c FROM test_results WHERE test_run_id = ? GROUP BY status");
+  const stmt = db.prepare(RUN_COUNTS_SQL);
   for (const id of runIds) {
     for (const row of stmt.all(id) as Row[]) out[id][String(row.status) as keyof ResultStatusCounts] = Number(row.c);
+  }
+  return out;
+}
+
+/** `countsFor` on SqlExecutor: one query per id, in the order given (Phase 3.1i). */
+export async function countsForSql(sql: SqlExecutor, runIds: string[]): Promise<Record<string, ResultStatusCounts>> {
+  const out: Record<string, ResultStatusCounts> = {};
+  for (const id of runIds) out[id] = emptyCounts();
+  if (!runIds.length) return out;
+  for (const id of runIds) {
+    for (const row of await sql.all<Row>(RUN_COUNTS_SQL, [id])) out[id][String(row.status) as keyof ResultStatusCounts] = Number(row.c);
   }
   return out;
 }
@@ -309,8 +326,17 @@ export function cancelRun(db: SqliteDatabase, id: string): boolean {
 }
 
 export function runDetail(db: SqliteDatabase, id: string): TestRunDetail | null {
-  const row = db.prepare("SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?").get(id) as Row | undefined;
-  if (!row) return null;
+  const row = db.prepare(RUN_DETAIL_SQL).get(id) as Row | undefined;
+  return row ? mapRunDetail(row, countsFor(db, [id])[id]) : null;
+}
+
+/** `runDetail` on SqlExecutor: the run row, then its counts (Phase 3.1i). */
+export async function runDetailSql(sql: SqlExecutor, id: string): Promise<TestRunDetail | null> {
+  const row = await sql.get<Row>(RUN_DETAIL_SQL, [id]);
+  return row ? mapRunDetail(row, (await countsForSql(sql, [id]))[id]) : null;
+}
+
+function mapRunDetail(row: Row, counts: ResultStatusCounts): TestRunDetail {
   const snapshot = json<{ modules?: string[]; browsers?: TestRunDetail["browsers"]; viewports?: string[]; pageIds?: string[] }>(row.config_snapshot, {});
   return {
     id: String(row.id),
@@ -333,7 +359,7 @@ export function runDetail(db: SqliteDatabase, id: string): TestRunDetail | null 
     startedAt: str(row.started_at),
     completedAt: str(row.completed_at),
     createdAt: String(row.created_at),
-    counts: countsFor(db, [id])[id],
+    counts,
   };
 }
 
@@ -353,8 +379,15 @@ export function mapRunSummary(row: Row): TestRun {
 
 // ---------------------------------------------------------------- results & cases
 
+/**
+ * Partially on SqlExecutor: `isKnownArtifact` (Phase 3.1l) uses `sql` (same SQL, parameter and result as before); the
+ * other methods still use the raw connection `db`. Both must be the same connection.
+ */
 export class LocalTestResultRepository implements TestResultRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(
+    private readonly db: SqliteDatabase,
+    private readonly sql: SqlExecutor,
+  ) {}
 
   private where(runId: string, q: TestResultQuery) {
     const where = ["tr.test_run_id = ?"];
@@ -429,7 +462,7 @@ export class LocalTestResultRepository implements TestResultRepository {
   }
 
   async isKnownArtifact(storageKey: string): Promise<boolean> {
-    return !!this.db.prepare("SELECT 1 FROM screenshots WHERE storage_key = ? LIMIT 1").get(storageKey);
+    return !!(await this.sql.get("SELECT 1 FROM screenshots WHERE storage_key = ? LIMIT 1", [storageKey]));
   }
 
   async listDetails(runId: string, viewId: string, filters: DetailFilters = {}): Promise<{ rows: DetailRowRecord[]; total: number }> {
@@ -474,12 +507,13 @@ export class LocalTestResultRepository implements TestResultRepository {
   }
 }
 
+/** On SqlExecutor (Phase 3.1j). Same SQL, parameter order and results as the former direct better-sqlite3 version. */
 export class LocalTestCaseRepository implements TestCaseRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async list(options: ListOptions = {}): Promise<TestCaseRecord[]> {
     const where: string[] = [];
-    const params: unknown[] = [];
+    const params: SqlValue[] = [];
     if (options.projectId) {
       where.push("tc.project_id = ?");
       params.push(options.projectId);
@@ -492,16 +526,23 @@ export class LocalTestCaseRepository implements TestCaseRepository {
       where.push(ownedProjectIds("tc.project_id"));
       params.push(options.ownerId);
     }
-    const rows = this.db
-      .prepare(
-        `SELECT tc.*, p.name AS project_name,
-           (SELECT json_group_array(json_object('status', s.status, 'count', s.c)) FROM
-              (SELECT status, COUNT(*) AS c FROM test_results WHERE test_case_id = tc.id GROUP BY status) s) AS result_summary
+    // The result summary is a JSON array text built per dialect (SQLite: json_group_array/json_object, in GROUP BY
+    // order; PostgreSQL: json_agg/json_build_object, ordered byte-wise like SQLite, '[]' when a case has no results).
+    // SQLite sorts NULL codes first by default; PostgreSQL needs NULLS FIRST for the same order (Phase 3.3a).
+    const postgres = this.sql.dialect === "postgres";
+    const summary = postgres
+      ? `COALESCE((SELECT json_agg(json_build_object('status', s.status, 'count', s.c) ORDER BY s.status COLLATE "C") FROM
+              (SELECT status, COUNT(*) AS c FROM test_results WHERE test_case_id = tc.id GROUP BY status) s), '[]'::json)::text`
+      : `(SELECT json_group_array(json_object('status', s.status, 'count', s.c)) FROM
+              (SELECT status, COUNT(*) AS c FROM test_results WHERE test_case_id = tc.id GROUP BY status) s)`;
+    const rows = await this.sql.all<Row>(
+      `SELECT tc.*, p.name AS project_name,
+           ${summary} AS result_summary
          FROM test_cases tc JOIN projects p ON p.id = tc.project_id
          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-         ORDER BY tc.created_at DESC, tc.code ASC LIMIT ?`,
-      )
-      .all(...params, clampLimit(options.limit, 5000)) as Row[];
+         ORDER BY tc.created_at DESC, tc.code ASC${postgres ? " NULLS FIRST" : ""} LIMIT ?`,
+      [...params, clampLimit(options.limit, 5000)],
+    );
     return rows.map((row) => ({
       id: String(row.id),
       projectId: String(row.project_id),
@@ -529,11 +570,13 @@ export class LocalTestCaseRepository implements TestCaseRepository {
 
 // ---------------------------------------------------------------- workers
 
+/** On SqlExecutor (Phase 3.1k). Same SQL and results as the former direct better-sqlite3 version. */
 export class LocalWorkerRepository implements WorkerRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async status(staleAfterMs = 15_000): Promise<WorkerStatus> {
-    const row = this.db.prepare("SELECT * FROM worker_heartbeats ORDER BY last_seen_at DESC LIMIT 1").get() as Row | undefined;
+    // No tie-break: when several heartbeats share the newest last_seen_at, which one is returned is not defined.
+    const row = await this.sql.get<Row>("SELECT * FROM worker_heartbeats ORDER BY last_seen_at DESC LIMIT 1");
     if (!row) return { online: false, lastSeenAt: null, handlers: [] };
     const lastSeen = String(row.last_seen_at);
     return { online: Date.now() - new Date(lastSeen).getTime() < staleAfterMs, lastSeenAt: lastSeen, handlers: json(row.handlers, []) };
