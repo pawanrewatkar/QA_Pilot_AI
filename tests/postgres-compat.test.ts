@@ -18,7 +18,7 @@ import { createPgTestDatabase, noRawConnection, sqliteSchema, type PgTestDatabas
 
 /**
  * Compatibility of the repository methods already on SqlExecutor, on SQLite and on PostgreSQL (PGlite, in process;
- * schema translated from the SQLite one by tests/support/postgres.ts). Each scenario runs on a fresh SQLite database
+ * schema from the versioned migrations in lib/database/postgres/migrations). Each scenario runs on a fresh SQLite database
  * and on a reset PostgreSQL database through the same repository classes; results must be identical. On PostgreSQL
  * the repositories get no SQLite connection at all, so any raw-connection use fails the test.
  *
@@ -178,10 +178,12 @@ async function seed(b: Backend) {
 }
 
 describe("PostgreSQL compatibility: schema", () => {
-  it("creates the same tables, columns and indexes", async () => {
+  it("creates the same tables, columns and indexes (versioned migrations)", async () => {
     const lite = sqliteSchema();
     const tables = (await pg.db.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")).rows.map((r) => r.table_name);
-    expect(tables.sort()).toEqual(lite.filter((s) => s.type === "table").map((s) => s.name).sort());
+    // SQLite's own migration table is replaced by qa_pilot_migrations (lib/database/postgres/migrator.ts).
+    const expected = [...lite.filter((s) => s.type === "table" && s.name !== "schema_migrations").map((s) => s.name), "qa_pilot_migrations"];
+    expect(tables.sort()).toEqual(expected.sort());
     const indexes = (await pg.db.query<{ indexname: string }>("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")).rows.map((r) => r.indexname);
     for (const s of lite.filter((s) => s.type === "index")) expect(indexes, s.name).toContain(s.name);
     const db = createTestDb();
