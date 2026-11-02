@@ -24,9 +24,9 @@ import type {
   TestResultRepository,
   WorkerRepository,
 } from "../provider";
+import { ilike, jsonText, tableColumns } from "../sql/dialect";
 import type { SqlExecutor, SqlValue } from "../sql/executor";
 import { ownedProjectIds } from "./ownership";
-import type { SqliteDatabase } from "./sqlite-client";
 
 type Row = Record<string, unknown>;
 
@@ -46,17 +46,17 @@ const likePattern = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 export const emptyCounts = (): ResultStatusCounts => ({ PASS: 0, FAIL: 0, WARNING: 0, "NOT EXECUTED": 0, "NOT APPLICABLE": 0 });
 
-/** Enqueues a worker job; must run inside the caller's transaction. */
-export function enqueueJob(db: SqliteDatabase, type: string, payload: unknown) {
+/** Enqueues a worker job; must run inside the caller's transaction (pass its `tx`). */
+export async function enqueueJob(sql: SqlExecutor, type: string, payload: unknown): Promise<void> {
   const ts = now();
-  db.prepare("INSERT INTO jobs (id, type, payload, status, max_attempts, run_after, created_at, updated_at) VALUES (?, ?, ?, 'PENDING', 1, ?, ?, ?)").run(
+  await sql.run("INSERT INTO jobs (id, type, payload, status, max_attempts, run_after, created_at, updated_at) VALUES (?, ?, ?, 'PENDING', 1, ?, ?, ?)", [
     randomUUID(),
     type,
     JSON.stringify(payload),
     ts,
     ts,
     ts,
-  );
+  ]);
 }
 
 // ---------------------------------------------------------------- pages
@@ -85,11 +85,11 @@ export function mapPage(row: Row): PageRecord {
 }
 
 export class LocalPageRepository implements PageRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
-  private where(q: PageQuery): { sql: string; params: unknown[] } {
+  private where(q: PageQuery): { sql: string; params: SqlValue[] } {
     const where: string[] = [];
-    const params: unknown[] = [];
+    const params: SqlValue[] = [];
     if (q.projectId) {
       where.push("pg.project_id = ?");
       params.push(q.projectId);
@@ -110,7 +110,8 @@ export class LocalPageRepository implements PageRepository {
     const search = q.search?.trim();
     if (search) {
       const p = likePattern(search);
-      where.push(`(pg.url LIKE ? ESCAPE '\\' OR pg.title LIKE ? ESCAPE '\\' OR pg.name LIKE ? ESCAPE '\\')`);
+      const like = ilike(this.sql);
+      where.push(`(pg.url ${like} ? ESCAPE '\\' OR pg.title ${like} ? ESCAPE '\\' OR pg.name ${like} ? ESCAPE '\\')`);
       params.push(p, p, p);
     }
     return { sql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
@@ -118,48 +119,45 @@ export class LocalPageRepository implements PageRepository {
 
   async list(q: PageQuery = {}): Promise<PageRecord[]> {
     const { sql, params } = this.where(q);
-    const rows = this.db
-      .prepare(
-        `SELECT pg.*, p.name AS project_name FROM pages pg JOIN projects p ON p.id = pg.project_id ${sql}
+    const rows = await this.sql.all<Row>(
+      `SELECT pg.*, p.name AS project_name FROM pages pg JOIN projects p ON p.id = pg.project_id ${sql}
          ORDER BY COALESCE(pg.depth, 99) ASC, pg.url ASC LIMIT ?`,
-      )
-      .all(...params, clampLimit(q.limit, 5000)) as Row[];
+      [...params, clampLimit(q.limit, 5000)],
+    );
     return rows.map(mapPage);
   }
 
   async count(q: PageQuery = {}): Promise<number> {
     const { sql, params } = this.where(q);
-    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM pages pg ${sql}`).get(...params) as Row).c);
+    return Number(((await this.sql.get<Row>(`SELECT COUNT(*) AS c FROM pages pg ${sql}`, params)) as Row).c);
   }
 
   async getByIds(projectId: string, ids: string[]): Promise<PageRecord[]> {
     if (!ids.length) return [];
     const out: PageRecord[] = [];
-    const stmt = this.db.prepare("SELECT pg.*, p.name AS project_name FROM pages pg JOIN projects p ON p.id = pg.project_id WHERE pg.project_id = ? AND pg.id = ?");
     for (const id of ids) {
-      const row = stmt.get(projectId, id) as Row | undefined;
+      const row = await this.sql.get<Row>("SELECT pg.*, p.name AS project_name FROM pages pg JOIN projects p ON p.id = pg.project_id WHERE pg.project_id = ? AND pg.id = ?", [projectId, id]);
       if (row) out.push(mapPage(row));
     }
     return out;
   }
 
   async setSelected(projectId: string, ids: string[], selected: boolean): Promise<number> {
-    const stmt = this.db.prepare("UPDATE pages SET is_selected = ? WHERE project_id = ? AND id = ?");
-    let changed = 0;
-    this.db.transaction(() => {
-      for (const id of ids) changed += stmt.run(selected ? 1 : 0, projectId, id).changes;
-    })();
-    return changed;
+    return this.sql.transaction(async (tx) => {
+      let changed = 0;
+      for (const id of ids) changed += (await tx.run("UPDATE pages SET is_selected = ? WHERE project_id = ? AND id = ?", [selected ? 1 : 0, projectId, id])).changes;
+      return changed;
+    });
   }
 
   async addManual(projectId: string, url: string, normalizedUrl: string): Promise<{ page: PageRecord; created: boolean }> {
-    const existing = this.db.prepare("SELECT id, discovery_sources FROM pages WHERE project_id = ? AND normalized_url = ?").get(projectId, normalizedUrl) as Row | undefined;
+    const existing = await this.sql.get<Row>("SELECT id, discovery_sources FROM pages WHERE project_id = ? AND normalized_url = ?", [projectId, normalizedUrl]);
     let id: string;
     let created = false;
     if (existing) {
       id = String(existing.id);
       const sources = [...new Set([...json<string[]>(existing.discovery_sources, []), "manual"])];
-      this.db.prepare("UPDATE pages SET discovery_sources = ?, is_selected = 1 WHERE id = ?").run(JSON.stringify(sources), id);
+      await this.sql.run("UPDATE pages SET discovery_sources = ?, is_selected = 1 WHERE id = ?", [JSON.stringify(sources), id]);
     } else {
       id = randomUUID();
       created = true;
@@ -170,24 +168,22 @@ export class LocalPageRepository implements PageRepository {
       } catch {
         /* keep default */
       }
-      this.db
-        .prepare(
-          `INSERT INTO pages (id, project_id, url, normalized_url, name, discovered_via, depth, page_type, crawl_status, discovery_sources, is_selected, first_seen_at, last_seen_at)
+      await this.sql.run(
+        `INSERT INTO pages (id, project_id, url, normalized_url, name, discovered_via, depth, page_type, crawl_status, discovery_sources, is_selected, first_seen_at, last_seen_at)
            VALUES (?, ?, ?, ?, ?, 'MANUAL', NULL, 'OTHER', 'DISCOVERED', '["manual"]', 1, ?, ?)`,
-        )
-        .run(id, projectId, url, normalizedUrl, name, ts, ts);
+        [id, projectId, url, normalizedUrl, name, ts, ts],
+      );
     }
-    const row = this.db.prepare("SELECT pg.*, p.name AS project_name FROM pages pg JOIN projects p ON p.id = pg.project_id WHERE pg.id = ?").get(id) as Row;
+    const row = (await this.sql.get<Row>("SELECT pg.*, p.name AS project_name FROM pages pg JOIN projects p ON p.id = pg.project_id WHERE pg.id = ?", [id])) as Row;
     return { page: mapPage(row), created };
   }
 
   async remove(projectId: string, ids: string[]): Promise<number> {
-    const stmt = this.db.prepare("DELETE FROM pages WHERE project_id = ? AND id = ?");
-    let removed = 0;
-    this.db.transaction(() => {
-      for (const id of ids) removed += stmt.run(projectId, id).changes;
-    })();
-    return removed;
+    return this.sql.transaction(async (tx) => {
+      let removed = 0;
+      for (const id of ids) removed += (await tx.run("DELETE FROM pages WHERE project_id = ? AND id = ?", [projectId, id])).changes;
+      return removed;
+    });
   }
 }
 
@@ -217,70 +213,59 @@ function mapCrawlRun(row: Row): CrawlRun {
 }
 
 export class LocalCrawlRunRepository implements CrawlRunRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async createAndEnqueue(projectId: string, startUrl: string, config: CrawlConfig): Promise<CrawlRun> {
     const id = randomUUID();
     const ts = now();
-    this.db.transaction(() => {
-      this.db
-        .prepare("INSERT INTO crawl_runs (id, project_id, status, config, start_url, created_at, updated_at) VALUES (?, ?, 'PENDING', ?, ?, ?, ?)")
-        .run(id, projectId, JSON.stringify(config), startUrl, ts, ts);
-      enqueueJob(this.db, "crawl.project", { crawlRunId: id });
-    })();
+    await this.sql.transaction(async (tx) => {
+      await tx.run("INSERT INTO crawl_runs (id, project_id, status, config, start_url, created_at, updated_at) VALUES (?, ?, 'PENDING', ?, ?, ?, ?)", [
+        id,
+        projectId,
+        JSON.stringify(config),
+        startUrl,
+        ts,
+        ts,
+      ]);
+      await enqueueJob(tx, "crawl.project", { crawlRunId: id });
+    });
     return (await this.getById(id))!;
   }
 
   async getById(id: string): Promise<CrawlRun | null> {
-    const row = this.db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Row | undefined;
+    const row = await this.sql.get<Row>("SELECT * FROM crawl_runs WHERE id = ?", [id]);
     return row ? mapCrawlRun(row) : null;
   }
 
   async latest(projectId: string): Promise<CrawlRun | null> {
-    const row = this.db.prepare("SELECT * FROM crawl_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId) as Row | undefined;
+    const row = await this.sql.get<Row>("SELECT * FROM crawl_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1", [projectId]);
     return row ? mapCrawlRun(row) : null;
   }
 
   async list(projectId: string, limit = 20): Promise<CrawlRun[]> {
-    return (this.db.prepare("SELECT * FROM crawl_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(projectId, clampLimit(limit)) as Row[]).map(mapCrawlRun);
+    return (await this.sql.all<Row>("SELECT * FROM crawl_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?", [projectId, clampLimit(limit)])).map(mapCrawlRun);
   }
 
   async requestCancel(id: string): Promise<boolean> {
     const ts = now();
-    let changed = false;
-    this.db.transaction(() => {
-      const pending = this.db.prepare("UPDATE crawl_runs SET status = 'CANCELLED', cancel_requested = 1, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'").run(ts, ts, id);
+    return this.sql.transaction(async (tx) => {
+      const pending = await tx.run("UPDATE crawl_runs SET status = 'CANCELLED', cancel_requested = 1, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'", [ts, ts, id]);
       if (pending.changes) {
-        this.db.prepare("UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND type = 'crawl.project' AND json_extract(payload, '$.crawlRunId') = ?").run(ts, id);
-        changed = true;
-        return;
+        await tx.run(`UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND type = 'crawl.project' AND ${jsonText(tx, "payload", "crawlRunId")} = ?`, [ts, id]);
+        return true;
       }
-      changed = this.db.prepare("UPDATE crawl_runs SET cancel_requested = 1, updated_at = ? WHERE id = ? AND status = 'RUNNING'").run(ts, id).changes > 0;
-    })();
-    return changed;
+      return (await tx.run("UPDATE crawl_runs SET cancel_requested = 1, updated_at = ? WHERE id = ? AND status = 'RUNNING'", [ts, id])).changes > 0;
+    });
   }
 }
 
 // ---------------------------------------------------------------- test runs (write + detail)
 
-// The read helpers below exist in two forms: synchronous on the raw connection (still used by reports and history)
-// and async on SqlExecutor (used by the test runs repository). Both share the SQL text and the mapping.
 const RUN_COUNTS_SQL = "SELECT status, COUNT(*) AS c FROM test_results WHERE test_run_id = ? GROUP BY status";
 const RUN_DETAIL_SQL = "SELECT r.*, p.name AS project_name FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?";
 
-export function countsFor(db: SqliteDatabase, runIds: string[]): Record<string, ResultStatusCounts> {
-  const out: Record<string, ResultStatusCounts> = {};
-  for (const id of runIds) out[id] = emptyCounts();
-  if (!runIds.length) return out;
-  const stmt = db.prepare(RUN_COUNTS_SQL);
-  for (const id of runIds) {
-    for (const row of stmt.all(id) as Row[]) out[id][String(row.status) as keyof ResultStatusCounts] = Number(row.c);
-  }
-  return out;
-}
-
-/** `countsFor` on SqlExecutor: one query per id, in the order given (Phase 3.1i). */
-export async function countsForSql(sql: SqlExecutor, runIds: string[]): Promise<Record<string, ResultStatusCounts>> {
+/** Result counts per run: one query per id, in the order given. */
+export async function countsFor(sql: SqlExecutor, runIds: string[]): Promise<Record<string, ResultStatusCounts>> {
   const out: Record<string, ResultStatusCounts> = {};
   for (const id of runIds) out[id] = emptyCounts();
   if (!runIds.length) return out;
@@ -290,7 +275,8 @@ export async function countsForSql(sql: SqlExecutor, runIds: string[]): Promise<
   return out;
 }
 
-export function createRunAndEnqueue(db: SqliteDatabase, input: NewTestRun): string {
+/** Creates a run and its job in one transaction; returns the run id. */
+export async function createRunAndEnqueue(sql: SqlExecutor, input: NewTestRun): Promise<string> {
   const id = randomUUID();
   const ts = now();
   const snapshot = {
@@ -300,40 +286,37 @@ export function createRunAndEnqueue(db: SqliteDatabase, input: NewTestRun): stri
     viewports: input.viewports,
     pageIds: input.pageIds,
   };
-  db.transaction(() => {
-    db.prepare(
+  await sql.transaction(async (tx) => {
+    await tx.run(
       `INSERT INTO test_runs (id, project_id, configuration_id, status, config_snapshot, name, options, progress_total, created_at, updated_at, run_type)
        VALUES (?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, input.projectId, input.configurationId, JSON.stringify(snapshot), input.name, JSON.stringify(input.options), input.pageIds.length * input.browsers.length * input.viewports.length, ts, ts, input.runType ?? "WEBSITE");
-    enqueueJob(db, "run.execute", { testRunId: id });
-  })();
+      [id, input.projectId, input.configurationId, JSON.stringify(snapshot), input.name, JSON.stringify(input.options), input.pageIds.length * input.browsers.length * input.viewports.length, ts, ts, input.runType ?? "WEBSITE"],
+    );
+    await enqueueJob(tx, "run.execute", { testRunId: id });
+  });
   return id;
 }
 
-export function cancelRun(db: SqliteDatabase, id: string): boolean {
+/**
+ * Cancels a run: a pending run is cancelled together with its queued job (one transaction); a running run is only
+ * flagged (the worker stops at its next check). Returns false for finished or missing runs.
+ */
+export async function cancelRun(sql: SqlExecutor, id: string): Promise<boolean> {
   const ts = now();
-  let changed = false;
-  db.transaction(() => {
-    const pending = db.prepare("UPDATE test_runs SET status = 'CANCELLED', cancel_requested = 1, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'").run(ts, ts, id);
+  return sql.transaction(async (tx) => {
+    const pending = await tx.run("UPDATE test_runs SET status = 'CANCELLED', cancel_requested = 1, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'", [ts, ts, id]);
     if (pending.changes) {
-      db.prepare("UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND type = 'run.execute' AND json_extract(payload, '$.testRunId') = ?").run(ts, id);
-      changed = true;
-      return;
+      await tx.run(`UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND type = 'run.execute' AND ${jsonText(tx, "payload", "testRunId")} = ?`, [ts, id]);
+      return true;
     }
-    changed = db.prepare("UPDATE test_runs SET cancel_requested = 1, updated_at = ? WHERE id = ? AND status = 'RUNNING'").run(ts, id).changes > 0;
-  })();
-  return changed;
+    return (await tx.run("UPDATE test_runs SET cancel_requested = 1, updated_at = ? WHERE id = ? AND status = 'RUNNING'", [ts, id])).changes > 0;
+  });
 }
 
-export function runDetail(db: SqliteDatabase, id: string): TestRunDetail | null {
-  const row = db.prepare(RUN_DETAIL_SQL).get(id) as Row | undefined;
-  return row ? mapRunDetail(row, countsFor(db, [id])[id]) : null;
-}
-
-/** `runDetail` on SqlExecutor: the run row, then its counts (Phase 3.1i). */
-export async function runDetailSql(sql: SqlExecutor, id: string): Promise<TestRunDetail | null> {
+/** A run with its configuration snapshot and result counts, or null. */
+export async function runDetail(sql: SqlExecutor, id: string): Promise<TestRunDetail | null> {
   const row = await sql.get<Row>(RUN_DETAIL_SQL, [id]);
-  return row ? mapRunDetail(row, (await countsForSql(sql, [id]))[id]) : null;
+  return row ? mapRunDetail(row, (await countsFor(sql, [id]))[id]) : null;
 }
 
 function mapRunDetail(row: Row, counts: ResultStatusCounts): TestRunDetail {
@@ -379,19 +362,12 @@ export function mapRunSummary(row: Row): TestRun {
 
 // ---------------------------------------------------------------- results & cases
 
-/**
- * Partially on SqlExecutor: `isKnownArtifact` (Phase 3.1l) uses `sql` (same SQL, parameter and result as before); the
- * other methods still use the raw connection `db`. Both must be the same connection.
- */
 export class LocalTestResultRepository implements TestResultRepository {
-  constructor(
-    private readonly db: SqliteDatabase,
-    private readonly sql: SqlExecutor,
-  ) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   private where(runId: string, q: TestResultQuery) {
     const where = ["tr.test_run_id = ?"];
-    const params: unknown[] = [runId];
+    const params: SqlValue[] = [runId];
     if (q.status) {
       where.push("tr.status = ?");
       params.push(q.status);
@@ -417,15 +393,16 @@ export class LocalTestResultRepository implements TestResultRepository {
 
   async listByRun(runId: string, q: TestResultQuery = {}): Promise<TestResultRecord[]> {
     const { sql, params } = this.where(runId, q);
-    const rows = this.db
-      .prepare(
-        `SELECT tr.*, tc.code, tc.module, tc.section, tc.scenario_type, tc.feature, tc.element, tc.title, tc.preconditions, tc.test_data, tc.expectation_source,
+    // SQLite sorts NULLs first; PostgreSQL needs NULLS FIRST for the same order.
+    const nulls = this.sql.dialect === "postgres" ? " NULLS FIRST" : "";
+    const rows = await this.sql.all<Row>(
+      `SELECT tr.*, tc.code, tc.module, tc.section, tc.scenario_type, tc.feature, tc.element, tc.title, tc.preconditions, tc.test_data, tc.expectation_source,
            tc.steps, tc.expected_result
          FROM test_results tr JOIN test_cases tc ON tc.id = tr.test_case_id ${sql}
          ORDER BY CASE tr.status WHEN 'FAIL' THEN 0 WHEN 'WARNING' THEN 1 WHEN 'PASS' THEN 2 WHEN 'NOT EXECUTED' THEN 3 ELSE 4 END,
-           tc.code ASC, tr.browser, tr.viewport LIMIT ? OFFSET ?`,
-      )
-      .all(...params, clampLimit(q.limit, 2000), Math.max(0, q.offset ?? 0)) as Row[];
+           tc.code ASC${nulls}, tr.browser${nulls}, tr.viewport${nulls} LIMIT ? OFFSET ?`,
+      [...params, clampLimit(q.limit, 2000), Math.max(0, q.offset ?? 0)],
+    );
     return rows.map((r) => ({
       id: String(r.id),
       testRunId: String(r.test_run_id),
@@ -458,7 +435,7 @@ export class LocalTestResultRepository implements TestResultRepository {
 
   async countByRun(runId: string, q: TestResultQuery = {}): Promise<number> {
     const { sql, params } = this.where(runId, q);
-    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM test_results tr JOIN test_cases tc ON tc.id = tr.test_case_id ${sql}`).get(...params) as Row).c);
+    return Number(((await this.sql.get<Row>(`SELECT COUNT(*) AS c FROM test_results tr JOIN test_cases tc ON tc.id = tr.test_case_id ${sql}`, params)) as Row).c);
   }
 
   async isKnownArtifact(storageKey: string): Promise<boolean> {
@@ -468,9 +445,9 @@ export class LocalTestResultRepository implements TestResultRepository {
   async listDetails(runId: string, viewId: string, filters: DetailFilters = {}): Promise<{ rows: DetailRowRecord[]; total: number }> {
     const view = getDetailView(viewId);
     if (!view) return { rows: [], total: 0 };
-    const cols = (this.db.prepare(`PRAGMA table_info(${view.table})`).all() as { name: string }[]).map((c) => c.name);
+    const cols = await tableColumns(this.sql, view.table);
     const where = ["d.test_run_id = ?"];
-    const params: unknown[] = [runId];
+    const params: SqlValue[] = [runId];
     // Browser/viewport come from the detail row when it has them, otherwise from the linked result.
     const browserExpr = cols.includes("browser") ? "COALESCE(d.browser, tr.browser)" : "tr.browser";
     const viewportExpr = cols.includes("viewport") ? "COALESCE(d.viewport, tr.viewport)" : "tr.viewport";
@@ -496,18 +473,16 @@ export class LocalTestResultRepository implements TestResultRepository {
     }
     const selected = view.columns.map((c) => c.key).filter((k) => cols.includes(k));
     const from = `FROM ${view.table} d LEFT JOIN pages pg ON pg.id = d.page_id LEFT JOIN test_results tr ON tr.id = d.test_result_id WHERE ${where.join(" AND ")}`;
-    const total = Number((this.db.prepare(`SELECT COUNT(*) AS c ${from}`).get(...params) as Row).c);
-    const rows = this.db
-      .prepare(
-        `SELECT d.id, d.page_id, ${selected.map((k) => `d.${k}`).join(", ")}, pg.url AS page_url, ${browserExpr} AS browser_name, ${viewportExpr} AS viewport_id
+    const total = Number(((await this.sql.get<Row>(`SELECT COUNT(*) AS c ${from}`, params)) as Row).c);
+    const rows = await this.sql.all<DetailRowRecord>(
+      `SELECT d.id, d.page_id, ${selected.map((k) => `d.${k}`).join(", ")}, pg.url AS page_url, ${browserExpr} AS browser_name, ${viewportExpr} AS viewport_id
          ${from} ORDER BY ${view.orderBy} LIMIT ? OFFSET ?`,
-      )
-      .all(...params, clampLimit(filters.limit, 1000), Math.max(0, filters.offset ?? 0)) as DetailRowRecord[];
+      [...params, clampLimit(filters.limit, 1000), Math.max(0, filters.offset ?? 0)],
+    );
     return { rows, total };
   }
 }
 
-/** On SqlExecutor (Phase 3.1j). Same SQL, parameter order and results as the former direct better-sqlite3 version. */
 export class LocalTestCaseRepository implements TestCaseRepository {
   constructor(private readonly sql: SqlExecutor) {}
 
@@ -570,7 +545,6 @@ export class LocalTestCaseRepository implements TestCaseRepository {
 
 // ---------------------------------------------------------------- workers
 
-/** On SqlExecutor (Phase 3.1k). Same SQL and results as the former direct better-sqlite3 version. */
 export class LocalWorkerRepository implements WorkerRepository {
   constructor(private readonly sql: SqlExecutor) {}
 

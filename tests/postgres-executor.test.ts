@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { readEnv } from "@/lib/config/env";
 import { createDatabaseProvider } from "@/lib/database";
-import { PostgresExecutor, toPostgresPlaceholders, type PgClientLike, type PgPoolLike } from "@/lib/database/sql/postgres-executor";
-import { DatabaseConfigurationError, selectSqlExecutor } from "@/lib/database/sql/select-executor";
+import { PostgresExecutor, postgresPoolConfig, toPostgresPlaceholders, type PgClientLike, type PgPoolLike } from "@/lib/database/sql/postgres-executor";
+import { DatabaseConfigurationError, postgresConfig, selectSqlExecutor } from "@/lib/database/sql/select-executor";
 import { SqliteExecutor } from "@/lib/database/sql/sqlite-executor";
 
 /**
@@ -275,7 +278,7 @@ describe("executor selection", () => {
     const open = vi.fn();
     const sql = selectSqlExecutor(readEnv({ DATABASE_PROVIDER: "supabase", DATABASE_URL: URL }), open, createPool);
     expect(sql).toBeInstanceOf(PostgresExecutor);
-    expect(createPool).toHaveBeenCalledWith(URL);
+    expect(createPool).toHaveBeenCalledWith(URL, { max: 5, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: undefined });
     expect(open).not.toHaveBeenCalled();
     expect(fake.log).toEqual([]);
   });
@@ -305,9 +308,117 @@ describe("executor selection", () => {
     for (const spy of logs) expect(spy).not.toHaveBeenCalled();
   });
 
-  it("leaves the app's database provider failing closed for supabase (repositories still need SQLite)", () => {
-    vi.stubEnv("DATABASE_PROVIDER", "supabase");
-    vi.stubEnv("DATABASE_URL", URL);
-    expect(() => createDatabaseProvider()).toThrow(/not implemented yet/);
+  it("opens the PostgreSQL provider for supabase, without connecting or touching SQLite", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-pg-provider-"));
+    const sqliteFile = path.join(dir, "must-not-exist.db");
+    try {
+      vi.stubEnv("DATABASE_PROVIDER", "supabase");
+      vi.stubEnv("DATABASE_URL", URL);
+      vi.stubEnv("DATABASE_PATH", sqliteFile);
+      const provider = createDatabaseProvider();
+      expect(provider.kind).toBe("supabase");
+      expect((provider as unknown as { sql: { dialect: string } }).sql.dialect).toBe("postgres");
+      expect(fs.existsSync(sqliteFile)).toBe(false);
+      await provider.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a misconfigured PostgreSQL selection before anything else, without opening SQLite or echoing secrets", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-pg-config-"));
+    const sqliteFile = path.join(dir, "must-not-exist.db");
+    try {
+      vi.stubEnv("DATABASE_PROVIDER", "supabase");
+      vi.stubEnv("DATABASE_PATH", sqliteFile);
+      vi.stubEnv("DATABASE_URL", "");
+      expect(() => createDatabaseProvider()).toThrow(DatabaseConfigurationError);
+      vi.stubEnv("DATABASE_URL", "mysql://user:s3cret-pass@host/db");
+      expect(() => createDatabaseProvider()).toThrow(/postgres:\/\/ or postgresql:\/\//);
+      vi.stubEnv("DATABASE_URL", URL);
+      vi.stubEnv("DATABASE_SSL_CA", "not a certificate");
+      expect(() => createDatabaseProvider()).toThrow(/DATABASE_SSL_CA must contain a PEM certificate/);
+      vi.stubEnv("DATABASE_SSL_CA", "");
+      vi.stubEnv("DATABASE_POOL_MAX", "500");
+      expect(() => createDatabaseProvider()).toThrow(/DATABASE_POOL_MAX/);
+      expect(fs.existsSync(sqliteFile)).toBe(false); // never fell back to SQLite
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PostgreSQL configuration", () => {
+  const URL = "postgresql://postgres.ref:p%40ss%5Dword@aws-0-region.pooler.supabase.com:5432/postgres";
+  const CA = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+
+  it("uses safe defaults and validated overrides from the environment", () => {
+    expect(postgresConfig(readEnv({ DATABASE_URL: URL }))).toEqual({ url: URL, options: { max: 5, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: undefined } });
+    const env = readEnv({ DATABASE_URL: URL, DATABASE_POOL_MAX: "2", DATABASE_CONNECT_TIMEOUT_MS: "5000", DATABASE_QUERY_TIMEOUT_MS: "60000", DATABASE_SSL_CA: CA });
+    expect(postgresConfig(env).options).toEqual({ max: 2, connectionTimeoutMillis: 5000, queryTimeoutMillis: 60_000, sslCa: CA });
+    for (const [key, value] of [["DATABASE_POOL_MAX", "0"], ["DATABASE_POOL_MAX", "x"], ["DATABASE_CONNECT_TIMEOUT_MS", "10"], ["DATABASE_QUERY_TIMEOUT_MS", "9999999"]]) {
+      expect(() => readEnv({ [key]: value }), `${key}=${value}`).toThrow(new RegExp(key));
+    }
+  });
+
+  it("rejects connection strings it cannot use, naming the variable but never the value", () => {
+    const secret = "s3cret-pass";
+    for (const bad of ["", "   ", `mysql://u:${secret}@h/db`, `postgresql:///db?password=${secret}`, `postgresql://u:${secret}@[bad/db`]) {
+      let message = "";
+      try {
+        postgresConfig(readEnv({ DATABASE_URL: bad }));
+      } catch (e) {
+        message = (e as Error).message;
+        expect(e, bad).toBeInstanceOf(DatabaseConfigurationError);
+      }
+      expect(message, bad).toMatch(/DATABASE_URL/);
+      expect(message).not.toContain(secret);
+    }
+  });
+
+  it("builds the pg pool settings: timeouts, pool size, application name, and SSL only when a CA is given", () => {
+    expect(postgresPoolConfig(URL)).toEqual({ connectionString: URL, max: 5, connectionTimeoutMillis: 10_000, query_timeout: 30_000, idleTimeoutMillis: 30_000, application_name: "qa-pilot-ai" });
+    expect(postgresPoolConfig(URL, { max: 1, connectionTimeoutMillis: 2000, queryTimeoutMillis: 120_000, sslCa: CA })).toMatchObject({ max: 1, connectionTimeoutMillis: 2000, query_timeout: 120_000, ssl: { ca: CA, rejectUnauthorized: true } });
+  });
+
+  it("passes the settings to the pool when the executor is selected", () => {
+    const fake = fakePool();
+    const createPool = vi.fn(() => fake.pool);
+    selectSqlExecutor(readEnv({ DATABASE_PROVIDER: "supabase", DATABASE_URL: URL, DATABASE_POOL_MAX: "3" }), vi.fn(), createPool);
+    expect(createPool).toHaveBeenCalledWith(URL, { max: 3, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: undefined });
+  });
+});
+
+describe("PostgresExecutor: work that outlives its transaction (regression)", () => {
+  it("never runs a late statement on a client that went back to the pool", async () => {
+    const { pool, log, released } = fakePool();
+    const sql = new PostgresExecutor(pool);
+    let late!: Promise<unknown>;
+    let lateInRollback!: Promise<unknown>;
+    await sql.transaction(async (tx) => {
+      await tx.run("INSERT INTO t VALUES (1)");
+      late = new Promise((r) => setTimeout(r, 5)).then(() => sql.run("UPDATE t SET late = 1"));
+    });
+    await sql
+      .transaction(async () => {
+        lateInRollback = new Promise((r) => setTimeout(r, 5)).then(() => sql.run("UPDATE t SET late = 2"));
+        throw new Error("rolled back");
+      })
+      .catch(() => undefined);
+    await Promise.all([late, lateInRollback]);
+    expect(released.map((r) => r.client)).toEqual(["client1", "client2"]);
+    // Both late statements ran on the pool, as ordinary statements outside any transaction.
+    expect(log.filter((l) => l.text.startsWith("UPDATE")).map((l) => l.on)).toEqual(["pool", "pool"]);
+  });
+
+  it("starts a new transaction (not a savepoint on a released client) when called after the outer one ended", async () => {
+    const { pool, log } = fakePool();
+    const sql = new PostgresExecutor(pool);
+    let lateTx!: Promise<unknown>;
+    await sql.transaction(async () => {
+      lateTx = new Promise((r) => setTimeout(r, 5)).then(() => sql.transaction((tx) => tx.run("INSERT INTO t VALUES ('late')")));
+    });
+    await lateTx;
+    expect(statements(log)).toEqual(["client1: BEGIN", "client1: COMMIT", "client2: BEGIN", "client2: INSERT INTO t VALUES ('late')", "client2: COMMIT"]);
   });
 });

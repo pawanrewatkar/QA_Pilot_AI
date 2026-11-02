@@ -98,9 +98,16 @@ const asError = (e: unknown) => (e instanceof Error ? e : new Error(String(e)));
  *
  * Errors are never logged here: they propagate to the caller unchanged.
  */
+/** A transaction's client while it is open; `open` turns false before the client goes back to the pool. */
+interface TransactionContext {
+  client: PgClientLike;
+  savepoints: number;
+  open: boolean;
+}
+
 export class PostgresExecutor implements SqlExecutor {
   readonly dialect = "postgres" as const;
-  private readonly context = new AsyncLocalStorage<{ client: PgClientLike; savepoints: number }>();
+  private readonly context = new AsyncLocalStorage<TransactionContext>();
 
   constructor(private readonly pool: PgPoolLike) {}
 
@@ -117,8 +124,8 @@ export class PostgresExecutor implements SqlExecutor {
   }
 
   async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
-    const ctx = this.context.getStore();
-    if (ctx) return this.savepoint(ctx, fn);
+    const outer = this.context.getStore();
+    if (outer?.open) return this.savepoint(outer, fn);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -127,8 +134,9 @@ export class PostgresExecutor implements SqlExecutor {
       throw error;
     }
     let broken: Error | undefined;
+    const ctx: TransactionContext = { client, savepoints: 0, open: true };
     try {
-      const value = await this.context.run({ client, savepoints: 0 }, () => fn(this));
+      const value = await this.context.run(ctx, () => fn(this));
       await client.query("COMMIT");
       return value;
     } catch (error) {
@@ -139,6 +147,9 @@ export class PostgresExecutor implements SqlExecutor {
       }
       throw error;
     } finally {
+      // Work started inside the transaction but still running afterwards must not reach this client once it is
+      // back in the pool (it could be inside another flow's transaction by then): it uses the pool instead.
+      ctx.open = false;
       client.release(broken);
     }
   }
@@ -148,7 +159,7 @@ export class PostgresExecutor implements SqlExecutor {
     await this.pool.end();
   }
 
-  private async savepoint<T>(ctx: { client: PgClientLike; savepoints: number }, fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+  private async savepoint<T>(ctx: TransactionContext, fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
     const name = `qa_sp_${++ctx.savepoints}`;
     try {
       await ctx.client.query(`SAVEPOINT ${name}`);
@@ -173,23 +184,57 @@ export class PostgresExecutor implements SqlExecutor {
   private async query(sql: string, params: readonly SqlValue[]) {
     const { text, count } = toPostgresPlaceholders(sql);
     if (count !== params.length) throw new RangeError(`Expected ${count} parameter value(s) but received ${params.length}`);
-    const target = this.context.getStore()?.client ?? this.pool;
+    const ctx = this.context.getStore();
+    const target = ctx?.open ? ctx.client : this.pool;
     return target.query(text, params.map(toPg));
   }
+}
+
+export interface PostgresPoolOptions {
+  /** Maximum connections in this process's pool. */
+  max?: number;
+  /** How long to wait for a connection (pool checkout or new connection) before failing. */
+  connectionTimeoutMillis?: number;
+  /** Client-side limit for each query; works through connection poolers (unlike a server statement_timeout). */
+  queryTimeoutMillis?: number;
+  /** PEM certificate(s) to verify the server against. When the connection string has its own `sslmode`, that wins. */
+  sslCa?: string;
+}
+
+/** `pg` pool settings. Pure (no connection); the connection string is passed through and never logged. */
+export function postgresPoolConfig(connectionString: string, options: PostgresPoolOptions = {}): pg.PoolConfig {
+  return {
+    connectionString,
+    max: options.max ?? 5,
+    connectionTimeoutMillis: options.connectionTimeoutMillis ?? 10_000,
+    query_timeout: options.queryTimeoutMillis ?? 30_000,
+    idleTimeoutMillis: 30_000,
+    application_name: "qa-pilot-ai",
+    ...(options.sslCa ? { ssl: { ca: options.sslCa, rejectUnauthorized: true } } : {}),
+  };
 }
 
 /**
  * Opens a pool for `connectionString`. No connection is made until the first query. The connection string is never
  * logged or included in errors raised here.
  */
-export function createPostgresExecutor(connectionString: string, createPool: (connectionString: string) => PgPoolLike = defaultPool): PostgresExecutor {
-  return new PostgresExecutor(createPool(connectionString));
+export function createPostgresExecutor(
+  connectionString: string,
+  createPool: (connectionString: string, options: PostgresPoolOptions) => PgPoolLike = defaultPool,
+  options: PostgresPoolOptions = {},
+): PostgresExecutor {
+  return new PostgresExecutor(createPool(connectionString, options));
 }
 
-function defaultPool(connectionString: string): PgPoolLike {
-  const pool = new pg.Pool({ connectionString });
+/** A real `pg` pool with the app's settings and an idle-error listener that logs only the error code. */
+export function createPgPool(connectionString: string, options: PostgresPoolOptions = {}): pg.Pool {
+  const pool = new pg.Pool(postgresPoolConfig(connectionString, options));
   // An idle client can fail (e.g. the server restarts); without a listener `pg` would crash the process.
   // Log only the error code, never connection details.
   pool.on("error", (error: Error & { code?: string }) => console.error(`PostgreSQL idle connection error (${error.code ?? error.name})`));
-  return pool as unknown as PgPoolLike;
+  return pool;
+}
+
+function defaultPool(connectionString: string, options: PostgresPoolOptions): PgPoolLike {
+  return createPgPool(connectionString, options) as unknown as PgPoolLike;
 }

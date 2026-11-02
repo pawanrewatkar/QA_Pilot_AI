@@ -8,19 +8,27 @@
  * Requires DATABASE_PROVIDER=supabase and DATABASE_URL from the environment (never committed). The connection string
  * is never printed.
  */
-import pg from "pg";
 import { readEnv } from "@/lib/config/env";
 import { applyMigrations, migrationStatus, type MigrationConnection } from "@/lib/database/postgres/migrator";
+import { createPgPool } from "@/lib/database/sql/postgres-executor";
+import { postgresConfig } from "@/lib/database/sql/select-executor";
 
 const env = readEnv();
 const apply = process.argv.includes("--apply");
-if (env.DATABASE_PROVIDER !== "supabase" || !env.DATABASE_URL || !/^postgres(ql)?:\/\//.test(env.DATABASE_URL)) {
-  console.error("Set DATABASE_PROVIDER=supabase and DATABASE_URL (postgres:// or postgresql://) in the environment.");
+if (env.DATABASE_PROVIDER !== "supabase") {
+  console.error("Set DATABASE_PROVIDER=supabase (and DATABASE_URL) in the environment.");
+  process.exit(1);
+}
+let config: ReturnType<typeof postgresConfig>;
+try {
+  config = postgresConfig(env); // validates DATABASE_URL and the pool settings without echoing them
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 1, connectionTimeoutMillis: 10_000 });
-pool.on("error", (error: Error & { code?: string }) => console.error(`PostgreSQL connection error (${error.code ?? error.name})`));
+// One connection (BEGIN/COMMIT must reach the same session); schema changes may take longer than app queries.
+const pool = createPgPool(config.url, { ...config.options, max: 1, queryTimeoutMillis: Math.max(config.options.queryTimeoutMillis ?? 0, 120_000) });
 const client = await pool.connect();
 const conn: MigrationConnection = { query: async (text, values) => ({ rows: (await client.query(text, values)).rows }) };
 try {

@@ -164,11 +164,10 @@ describe("run history: countRuns", () => {
     expect(await alice.history.countRuns({ status: "COMPLETED" })).toBe(3);
   });
 
-  it("is constructed by the provider with its connection and its SQL executor", () => {
+  it("is constructed by the provider with its SQL executor only", () => {
     expect(constructed).toHaveLength(1);
-    const [conn, sql] = constructed[0];
-    expect(conn).toBe(base.sqlite);
-    expect(sql).toBe(base.sql);
+    expect(constructed[0]).toEqual([base.sql]);
+    expect(constructed[0][0]).toBe(base.sql);
   });
 
   it("produces the recorded behaviour snapshot", async () => {

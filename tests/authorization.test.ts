@@ -7,7 +7,7 @@ import { resolveIdentityConfig as resolveIdentity } from "@/lib/auth/identity";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import { DEFAULT_CRAWL_CONFIG } from "@/lib/constants/crawl";
 import { DEFAULT_REPORT_SECTIONS } from "@/lib/constants/testing";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { openSqlite, runMigrations } from "@/lib/database/local/sqlite-client";
 import { OwnerScopedDatabaseProvider, ResourceNotFoundError } from "@/lib/database/owner-scoped-provider";
@@ -31,21 +31,21 @@ async function seedOwner(base: LocalDatabaseProvider, storage: LocalStorageProvi
   const document = await base.documents.create({ projectId: project.id, kind: "REFERENCE", fileName: "ref.pdf", mimeType: "application/pdf", sizeBytes: 1, storageKey: `projects/${project.id}/documents/ref.pdf`, checksumSha256: "x" });
   const crawl = await base.crawlRuns.createAndEnqueue(project.id, project.websiteUrl, DEFAULT_CRAWL_CONFIG);
   const { page } = await base.pages.addManual(project.id, project.websiteUrl, project.websiteUrl);
-  const store = new SqliteEngineStore(base.sqlite);
+  const store = new EngineStore(base.sql);
   const run = await base.testRuns.createAndEnqueue({ projectId: project.id, configurationId: null, name: `${name} run`, modules: ["links"], browsers: ["chromium"], viewports: [VIEWPORT], pageIds: [page.id], configurationName: null, options: { allowFormSubmission: false, maxLinksPerPage: 10, navigationTimeoutMs: 1000 } });
   base.sqlite.prepare("UPDATE jobs SET status = 'COMPLETED' WHERE json_extract(payload, '$.testRunId') = ?").run(run.id);
-  store.markRunRunning(run.id, 1);
-  const rp = store.ensureRunPage(run.id, page.id);
+  await store.markRunRunning(run.id, 1);
+  const rp = await store.ensureRunPage(run.id, page.id);
   const screenshotKey = `runs/${run.id}/${page.id}/chromium-${VIEWPORT}/01-viewport.png`;
   await storage.put(screenshotKey, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
-  store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: screenshotKey, browser: "chromium", viewport: VIEWPORT, width: 1, height: 1 });
-  store.recordOutcome({ runId: run.id, projectId: project.id, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport: VIEWPORT, outcome: finalizeOutcome(outcome.fail(failSpec, "404", [{ type: "screenshot", label: "s", storageKey: screenshotKey }])) });
-  store.finishRunPage(rp, "COMPLETED", null);
-  store.finishRun(run.id, "COMPLETED", null);
-  createBugsForRun(base.sqlite, run.id);
+  await store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: screenshotKey, browser: "chromium", viewport: VIEWPORT, width: 1, height: 1 });
+  await store.recordOutcome({ runId: run.id, projectId: project.id, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport: VIEWPORT, outcome: finalizeOutcome(outcome.fail(failSpec, "404", [{ type: "screenshot", label: "s", storageKey: screenshotKey }])) });
+  await store.finishRunPage(rp, "COMPLETED", null);
+  await store.finishRun(run.id, "COMPLETED", null);
+  await createBugsForRun(base.sql, run.id);
   const [bug] = await base.bugs.list({ testRunId: run.id });
   const bundle = await base.reports.requestBundle(run.id);
-  await generateReportBundle(base.sqlite, storage, bundle.id, { render: async () => new TextEncoder().encode("%PDF-1.4") });
+  await generateReportBundle(base.sql, storage, bundle.id, { render: async () => new TextEncoder().encode("%PDF-1.4") });
   const externalRunId = await base.externalTests.create({
     projectId: project.id, name: `${name} external`, websiteUrl: project.websiteUrl, pageId: page.id, source: { kind: "UPLOAD", name: "cases.xlsx", storageKey: `projects/${project.id}/external-test-cases/a.xlsx` },
     worksheet: "Cases", headerRow: 1, mapping: { title: 1, expected: 2 }, outputMode: "NEW_SHEET", browsers: ["chromium"], viewports: [VIEWPORT], allowFormSubmission: false, navigationTimeoutMs: 1000,

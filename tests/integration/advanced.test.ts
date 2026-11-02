@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizeCrawlUrl } from "@/lib/crawler/normalize";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { LocalStorageProvider } from "@/lib/storage/local-storage-provider";
 import type { TestResultRecord } from "@/types";
@@ -45,7 +45,7 @@ describe.skipIf(!browserInstalled("chromium"))("advanced modules against a real 
       options: { allowFormSubmission: false, maxLinksPerPage: 50, navigationTimeoutMs: 20_000, typographyMode: "TYPOGRAPHY_CONTENT", content: { mode: "SECTION", exclusions: ["header", "footer", "navigation"], customSelectors: [] }, performance: { formFactors: ["desktop"] } },
     });
     runId = run.id;
-    summary = await executeRun(run.id, { store: new SqliteEngineStore(db.sqlite), storage, log: () => undefined });
+    summary = await executeRun(run.id, { store: new EngineStore(db.sql), storage, log: () => undefined });
     results = await db.testResults.listByRun(run.id, { limit: 2000 });
   }, INTEGRATION_TIMEOUT * 3);
 

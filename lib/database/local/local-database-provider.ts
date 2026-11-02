@@ -42,7 +42,7 @@ import type {
 } from "../provider";
 import {
   cancelRun,
-  countsForSql,
+  countsFor,
   createRunAndEnqueue,
   LocalCrawlRunRepository,
   LocalPageRepository,
@@ -50,7 +50,7 @@ import {
   LocalTestResultRepository,
   LocalWorkerRepository,
   mapRunSummary,
-  runDetailSql,
+  runDetail,
 } from "./engine-repositories";
 import { LocalBugRepository } from "./bug-repository";
 import { LocalOwnershipRepository, ownedProjectIds, ownedRunIds } from "./ownership";
@@ -58,6 +58,7 @@ import { LocalHistoryRepository } from "./history-repository";
 import { LocalExternalTestRepository } from "./external-test-repository";
 import { LocalReportRepository } from "./report-repository";
 import { getSchemaVersion, openSqlite, runMigrations, type SqliteDatabase } from "./sqlite-client";
+import { ilike, jsonText, nocase } from "../sql/dialect";
 import type { SqlExecutor, SqlValue } from "../sql/executor";
 import { SqliteExecutor } from "../sql/sqlite-executor";
 
@@ -146,31 +147,36 @@ function mapConfiguration(row: Row): TestConfiguration {
   };
 }
 
-const PROJECT_SUMMARY_SELECT = `
+/** Project rows with their counts and latest reference document (as JSON text: json_object / json_build_object). */
+function projectSummarySelect(sql: Pick<SqlExecutor, "dialect">): string {
+  const fields = `'id', d.id, 'project_id', d.project_id, 'kind', d.kind, 'file_name', d.file_name,
+      'mime_type', d.mime_type, 'size_bytes', d.size_bytes, 'storage_key', d.storage_key,
+      'checksum_sha256', d.checksum_sha256, 'created_at', d.created_at`;
+  const document = sql.dialect === "postgres" ? `json_build_object(${fields})::text` : `json_object(${fields})`;
+  return `
 SELECT p.*,
   (SELECT COUNT(*) FROM test_runs r WHERE r.project_id = p.id) AS test_run_count,
   (SELECT COUNT(*) FROM pages pg WHERE pg.project_id = p.id) AS page_count,
   (SELECT COUNT(*) FROM bugs b WHERE b.project_id = p.id AND b.status IN ('OPEN','IN_PROGRESS')) AS open_bug_count,
   (SELECT MAX(COALESCE(r.started_at, r.created_at)) FROM test_runs r WHERE r.project_id = p.id) AS last_run_at,
-  (SELECT json_object(
-      'id', d.id, 'project_id', d.project_id, 'kind', d.kind, 'file_name', d.file_name,
-      'mime_type', d.mime_type, 'size_bytes', d.size_bytes, 'storage_key', d.storage_key,
-      'checksum_sha256', d.checksum_sha256, 'created_at', d.created_at)
+  (SELECT ${document}
     FROM documents d WHERE d.project_id = p.id AND d.kind = 'REFERENCE'
     ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1) AS reference_document
 FROM projects p`;
+}
 
 class LocalProjectRepository implements ProjectRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async list(query: ProjectQuery = {}): Promise<ProjectSummary[]> {
     const where: string[] = [];
-    const params: unknown[] = [];
+    const params: SqlValue[] = [];
 
     const search = query.search?.trim();
     if (search) {
       const pattern = likePattern(search);
-      where.push(`(p.name LIKE ? ESCAPE '\\' OR p.website_url LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\')`);
+      const like = ilike(this.sql);
+      where.push(`(p.name ${like} ? ESCAPE '\\' OR p.website_url ${like} ? ESCAPE '\\' OR p.description ${like} ? ESCAPE '\\')`);
       params.push(pattern, pattern, pattern);
     }
 
@@ -196,75 +202,70 @@ class LocalProjectRepository implements ProjectRepository {
 
     const orderBy =
       query.sort === "name"
-        ? "p.name COLLATE NOCASE ASC, p.rowid ASC"
+        ? `${nocase(this.sql, "p.name")} ASC, p.rowid ASC`
         : query.sort === "created"
           ? "p.created_at DESC, p.rowid DESC"
           : "p.updated_at DESC, p.rowid DESC";
 
-    const sql = `${PROJECT_SUMMARY_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY ${orderBy}`;
-    return (this.db.prepare(sql).all(...params) as Row[]).map(mapProjectSummary);
+    const sql = `${projectSummarySelect(this.sql)} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY ${orderBy}`;
+    return (await this.sql.all<Row>(sql, params)).map(mapProjectSummary);
   }
 
   async getById(id: string): Promise<ProjectSummary | null> {
-    const row = this.db.prepare(`${PROJECT_SUMMARY_SELECT} WHERE p.id = ?`).get(id) as Row | undefined;
+    const row = await this.sql.get<Row>(`${projectSummarySelect(this.sql)} WHERE p.id = ?`, [id]);
     return row ? mapProjectSummary(row) : null;
   }
 
   async create(input: ProjectInput, ownerId?: string): Promise<Project> {
     const id = randomUUID();
     const ts = now();
-    this.db
-      .prepare(
-        `INSERT INTO projects (id, name, website_url, description, figma_url, test_email, created_at, updated_at, owner_id)
+    // Without a trusted owner the project has none and is visible to no scoped identity (fail closed).
+    await this.sql.run(
+      `INSERT INTO projects (id, name, website_url, description, figma_url, test_email, created_at, updated_at, owner_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      // Without a trusted owner the project has none and is visible to no scoped identity (fail closed).
-      .run(id, input.name, input.websiteUrl, input.description, input.figmaUrl, input.testEmail, ts, ts, ownerId ?? null);
-    return mapProject(this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Row);
+      [id, input.name, input.websiteUrl, input.description, input.figmaUrl, input.testEmail, ts, ts, ownerId ?? null],
+    );
+    return mapProject((await this.sql.get<Row>("SELECT * FROM projects WHERE id = ?", [id])) as Row);
   }
 
   async update(id: string, input: ProjectInput): Promise<Project | null> {
-    const result = this.db
-      .prepare(
-        `UPDATE projects SET name = ?, website_url = ?, description = ?, figma_url = ?, test_email = ?, updated_at = ?
+    const result = await this.sql.run(
+      `UPDATE projects SET name = ?, website_url = ?, description = ?, figma_url = ?, test_email = ?, updated_at = ?
          WHERE id = ?`,
-      )
-      .run(input.name, input.websiteUrl, input.description, input.figmaUrl, input.testEmail, now(), id);
+      [input.name, input.websiteUrl, input.description, input.figmaUrl, input.testEmail, now(), id],
+    );
     if (result.changes === 0) return null;
-    return mapProject(this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Row);
+    return mapProject((await this.sql.get<Row>("SELECT * FROM projects WHERE id = ?", [id])) as Row);
   }
 
   async delete(id: string): Promise<boolean> {
-    let deleted = false;
     const ts = now();
-    this.db.transaction(() => {
+    return this.sql.transaction(async (tx) => {
       // Queued work for this project is cancelled and running work is asked to stop, so the worker
       // never picks up a job whose records are gone. (jobs has no foreign key: payloads are JSON.)
-      this.db.prepare("UPDATE test_runs SET cancel_requested = 1 WHERE project_id = ? AND status IN ('PENDING','RUNNING')").run(id);
-      this.db.prepare("UPDATE crawl_runs SET cancel_requested = 1 WHERE project_id = ? AND status IN ('PENDING','RUNNING')").run(id);
-      this.db
-        .prepare(
-          `UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND (
-             json_extract(payload, '$.testRunId') IN (SELECT id FROM test_runs WHERE project_id = ?)
-             OR json_extract(payload, '$.crawlRunId') IN (SELECT id FROM crawl_runs WHERE project_id = ?)
-             OR json_extract(payload, '$.reportBundleId') IN (SELECT id FROM report_bundles WHERE project_id = ?))`,
-        )
-        .run(ts, id, id, id);
-      deleted = this.db.prepare("DELETE FROM projects WHERE id = ?").run(id).changes > 0;
-    })();
-    return deleted;
+      await tx.run("UPDATE test_runs SET cancel_requested = 1 WHERE project_id = ? AND status IN ('PENDING','RUNNING')", [id]);
+      await tx.run("UPDATE crawl_runs SET cancel_requested = 1 WHERE project_id = ? AND status IN ('PENDING','RUNNING')", [id]);
+      await tx.run(
+        `UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND (
+             ${jsonText(tx, "payload", "testRunId")} IN (SELECT id FROM test_runs WHERE project_id = ?)
+             OR ${jsonText(tx, "payload", "crawlRunId")} IN (SELECT id FROM crawl_runs WHERE project_id = ?)
+             OR ${jsonText(tx, "payload", "reportBundleId")} IN (SELECT id FROM report_bundles WHERE project_id = ?))`,
+        [ts, id, id, id],
+      );
+      return (await tx.run("DELETE FROM projects WHERE id = ?", [id])).changes > 0;
+    });
   }
 
   async storagePrefixes(id: string): Promise<string[]> {
-    const runs = this.db.prepare("SELECT id FROM test_runs WHERE project_id = ?").all(id) as Row[];
-    const bundles = this.db.prepare("SELECT id FROM report_bundles WHERE project_id = ?").all(id) as Row[];
+    const runs = await this.sql.all<Row>("SELECT id FROM test_runs WHERE project_id = ?", [id]);
+    const bundles = await this.sql.all<Row>("SELECT id FROM report_bundles WHERE project_id = ?", [id]);
     return [...runs.map((r) => `runs/${String(r.id)}`), ...bundles.map((b) => `reports/${String(b.id)}`)];
   }
 
   async count(ownerId?: string): Promise<number> {
     return ownerId === undefined
-      ? num((this.db.prepare("SELECT COUNT(*) AS c FROM projects").get() as Row).c)
-      : num((this.db.prepare("SELECT COUNT(*) AS c FROM projects WHERE owner_id = ?").get(ownerId) as Row).c);
+      ? num(((await this.sql.get<Row>("SELECT COUNT(*) AS c FROM projects")) as Row).c)
+      : num(((await this.sql.get<Row>("SELECT COUNT(*) AS c FROM projects WHERE owner_id = ?", [ownerId])) as Row).c);
   }
 }
 
@@ -367,19 +368,8 @@ function projectScope(options: ListOptions, alias: string, ownerColumn?: string)
   return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
 }
 
-/**
- * Partially on SqlExecutor:
- * - `list` and `getById` (Phase 3.1e), `getDetail` and `countsByRun` (Phase 3.1i) use `sql` (same SQL, parameter
- *   order and results as before);
- * - `createAndEnqueue` and `requestCancel` still call the engine helpers with the raw connection `db`: both run a
- *   synchronous SQLite transaction (cancelling a pending run also cancels its queued job atomically). They move in
- *   the transactional phase.
- */
 export class LocalTestRunRepository implements TestRunRepository {
-  constructor(
-    private readonly db: SqliteDatabase,
-    private readonly sql: SqlExecutor,
-  ) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async list(options: ListOptions = {}): Promise<TestRun[]> {
     const { clause, params } = projectScope(options, "r");
@@ -399,19 +389,19 @@ export class LocalTestRunRepository implements TestRunRepository {
   }
 
   async getDetail(id: string): Promise<TestRunDetail | null> {
-    return runDetailSql(this.sql, id);
+    return runDetail(this.sql, id);
   }
 
   async createAndEnqueue(input: NewTestRun): Promise<TestRun> {
-    return (await this.getById(createRunAndEnqueue(this.db, input)))!;
+    return (await this.getById(await createRunAndEnqueue(this.sql, input)))!;
   }
 
   async requestCancel(id: string): Promise<boolean> {
-    return cancelRun(this.db, id);
+    return cancelRun(this.sql, id);
   }
 
   async countsByRun(runIds: string[]): Promise<Record<string, ResultStatusCounts>> {
-    return countsForSql(this.sql, runIds);
+    return countsFor(this.sql, runIds);
   }
 }
 
@@ -557,6 +547,31 @@ export class LocalDashboardRepository implements DashboardRepository {
   }
 }
 
+/**
+ * Every repository, on one SqlExecutor. The same classes serve SQLite (LocalDatabaseProvider) and PostgreSQL
+ * (lib/database/supabase/supabase-database-provider.ts); dialect differences live in lib/database/sql/dialect.ts.
+ */
+export function sqlRepositories(sql: SqlExecutor) {
+  return {
+    projects: new LocalProjectRepository(sql) as ProjectRepository,
+    documents: new LocalDocumentRepository(sql) as DocumentRepository,
+    testConfigurations: new LocalTestConfigurationRepository(sql) as TestConfigurationRepository,
+    testRuns: new LocalTestRunRepository(sql) as TestRunRepository,
+    testResults: new LocalTestResultRepository(sql) as TestResultRepository,
+    crawlRuns: new LocalCrawlRunRepository(sql) as CrawlRunRepository,
+    workers: new LocalWorkerRepository(sql) as WorkerRepository,
+    pages: new LocalPageRepository(sql) as PageRepository,
+    testCases: new LocalTestCaseRepository(sql) as TestCaseRepository,
+    bugs: new LocalBugRepository(sql) as BugRepository,
+    reports: new LocalReportRepository(sql) as ReportRepository,
+    history: new LocalHistoryRepository(sql) as HistoryRepository,
+    externalTests: new LocalExternalTestRepository(sql) as ExternalTestRepository,
+    activity: new LocalActivityRepository(sql) as ActivityRepository,
+    dashboard: new LocalDashboardRepository(sql) as DashboardRepository,
+    ownership: new LocalOwnershipRepository(sql) as OwnershipRepository,
+  };
+}
+
 export class LocalDatabaseProvider implements DatabaseProvider {
   readonly kind = "local-sqlite" as const;
 
@@ -577,30 +592,31 @@ export class LocalDatabaseProvider implements DatabaseProvider {
   readonly dashboard: DashboardRepository;
   readonly ownership: OwnershipRepository;
 
-  /** Exposed for the worker and tests; app code should go through the repositories. */
+  /** The raw connection, for migrations, health checks and test setup only; app code goes through `sql`. */
   readonly sqlite: SqliteDatabase;
-  /** Async, database-neutral access to the same connection (repositories are moved onto it step by step). */
+  /** Async, database-neutral access to the connection; every repository uses it. */
   readonly sql: SqlExecutor;
 
   constructor(db: SqliteDatabase) {
     this.sqlite = db;
     this.sql = new SqliteExecutor(db);
-    this.projects = new LocalProjectRepository(db);
-    this.documents = new LocalDocumentRepository(this.sql);
-    this.testConfigurations = new LocalTestConfigurationRepository(this.sql);
-    this.testRuns = new LocalTestRunRepository(db, this.sql);
-    this.testResults = new LocalTestResultRepository(db, this.sql);
-    this.crawlRuns = new LocalCrawlRunRepository(db);
-    this.workers = new LocalWorkerRepository(this.sql);
-    this.pages = new LocalPageRepository(db);
-    this.testCases = new LocalTestCaseRepository(this.sql);
-    this.bugs = new LocalBugRepository(db);
-    this.reports = new LocalReportRepository(db);
-    this.history = new LocalHistoryRepository(db, this.sql);
-    this.externalTests = new LocalExternalTestRepository(db);
-    this.activity = new LocalActivityRepository(this.sql);
-    this.dashboard = new LocalDashboardRepository(this.sql);
-    this.ownership = new LocalOwnershipRepository(this.sql);
+    const repos = sqlRepositories(this.sql);
+    this.projects = repos.projects;
+    this.documents = repos.documents;
+    this.testConfigurations = repos.testConfigurations;
+    this.testRuns = repos.testRuns;
+    this.testResults = repos.testResults;
+    this.crawlRuns = repos.crawlRuns;
+    this.workers = repos.workers;
+    this.pages = repos.pages;
+    this.testCases = repos.testCases;
+    this.bugs = repos.bugs;
+    this.reports = repos.reports;
+    this.history = repos.history;
+    this.externalTests = repos.externalTests;
+    this.activity = repos.activity;
+    this.dashboard = repos.dashboard;
+    this.ownership = repos.ownership;
   }
 
   /** Opens the database file and applies pending migrations. */

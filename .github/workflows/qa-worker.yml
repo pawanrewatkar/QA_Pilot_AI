@@ -1,0 +1,82 @@
+# QA Pilot AI browser-test worker on GitHub Actions.
+#
+# Claims queued jobs (crawls, test runs, report generation) from the hosted PostgreSQL database, runs them in real
+# browsers, writes results to the database and screenshots/reports to the private Supabase Storage bucket, then exits
+# when the queue is empty (or the runtime limit is reached). Nothing is published from this workflow: no GitHub
+# artifacts, no caches containing results. See docs/github-actions-worker.md before enabling it.
+#
+# Triggers: manual only for now. A schedule (and dispatch from the app) can be added once the manual runs are verified;
+# see the documentation.
+name: QA worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_runtime_minutes:
+        description: Stop claiming new jobs after this many minutes (the job in progress always finishes)
+        required: false
+        default: "45"
+
+# Least privilege: the workflow only reads the repository. It never writes to GitHub.
+permissions:
+  contents: read
+
+# One worker at a time from this workflow (jobs are claimed safely even with several, but one keeps costs predictable).
+concurrency:
+  group: qa-worker
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    name: Run queued QA jobs
+    runs-on: ubuntu-24.04
+    # Hard limit; the worker stops claiming new jobs well before it (max_runtime_minutes).
+    timeout-minutes: 90
+    # Secrets live in this environment (Settings → Environments → qa-worker), not in repository-wide secrets, so
+    # protection rules (required reviewers, allowed branches) can apply to every run.
+    environment: qa-worker
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # No secrets are available to this step (or any step but the worker), so install scripts cannot read them.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install browsers
+        if: steps.browsers.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Install browser system dependencies
+        if: steps.browsers.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium firefox webkit
+
+      - name: Run worker
+        # The only step with secrets. They are passed as environment variables (never interpolated into the script),
+        # GitHub masks their values in logs, and the worker never prints connection strings or keys.
+        env:
+          NODE_ENV: production
+          DATABASE_PROVIDER: supabase
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_POOL_MAX: "3"
+          STORAGE_PROVIDER: supabase
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          STORAGE_BUCKET: ${{ vars.STORAGE_BUCKET || 'qa-pilot-artifacts' }}
+          WORKER_MAX_RUNTIME_MINUTES: ${{ inputs.max_runtime_minutes || '45' }}
+        run: npm run worker -- --once

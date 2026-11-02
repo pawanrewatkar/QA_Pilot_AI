@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import { LOCAL_OWNER_ID } from "@/lib/auth/identity-constants";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBugsForRun } from "@/lib/bugs/engine";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { judge, type Observation, type PageFacts } from "@/lib/external-tests/evaluate";
 import { finalizeExternalRun } from "@/lib/external-tests/finalize";
@@ -355,13 +355,13 @@ describe("execution workflow", () => {
     const res = await start();
     if (!res.ok) throw new Error(res.error);
     const runId = res.value.runId;
-    const store = new SqliteEngineStore(db.sqlite);
-    const run = store.getRunForExecution(runId)!;
+    const store = new EngineStore(db.sql);
+    const run = (await store.getRunForExecution(runId))!;
     expect(run.runType).toBe("EXTERNAL_TEST_CASE");
-    const cases = store.getExternalCases(runId);
-    store.markRunRunning(runId, 3);
+    const cases = await store.getExternalCases(runId);
+    await store.markRunRunning(runId, 3);
     const page = run.pages[0];
-    const rp = store.ensureRunPage(runId, page.id);
+    const rp = await store.ensureRunPage(runId, page.id);
     const shot = `runs/${runId}/${page.id}/s.png`;
     const statuses = { TC01: ["PASS", "FAIL", "NOT APPLICABLE"], TC02: ["HUMAN INTERACTION", "HUMAN INTERACTION", "HUMAN INTERACTION"], TC03: ["PASS", "PASS", "PASS"] } as const;
     for (const c of cases) {
@@ -369,15 +369,15 @@ describe("execution workflow", () => {
         const status = statuses[c.caseRef as keyof typeof statuses][i];
         const s = externalSpec(c);
         const o = status === "PASS" ? outcome.pass(s, "ok", ["verified"]) : status === "FAIL" ? outcome.fail(s, "Login link missing on mobile", [{ type: "screenshot", label: "x", storageKey: shot }]) : status === "HUMAN INTERACTION" ? outcome.warn(s, "needs a person") : outcome.notApplicable(s, "n/a");
-        store.recordOutcome({ runId, projectId: run.projectId, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport, outcome: finalizeOutcome(o) });
-        store.saveExternalObservation(runId, { caseId: c.id, browser: "chromium", viewport, status, actual: status === "HUMAN INTERACTION" ? "This test case needs human interaction." : `${status} on ${viewport}`, screenshotKey: status === "FAIL" ? shot : null, durationMs: 5 });
+        await store.recordOutcome({ runId, projectId: run.projectId, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport, outcome: finalizeOutcome(o) });
+        await store.saveExternalObservation(runId, { caseId: c.id, browser: "chromium", viewport, status, actual: status === "HUMAN INTERACTION" ? "This test case needs human interaction." : `${status} on ${viewport}`, screenshotKey: status === "FAIL" ? shot : null, durationMs: 5 });
       }
     }
     const live = (await db.externalTests.get(runId))!;
     expect(live).toMatchObject({ completedCases: 3, counts: { PASS: 1, FAIL: 1, "HUMAN INTERACTION": 1 } });
 
-    await finalizeExternalRun(db.sqlite, deps.storage, runId);
-    store.finishRun(runId, "COMPLETED", null);
+    await finalizeExternalRun(db.sql, deps.storage, runId);
+    await store.finishRun(runId, "COMPLETED", null);
     const { rows } = await db.externalTests.listCases(runId);
     expect(rows.map((r) => [r.caseRef, r.status])).toEqual([["TC01", "FAIL"], ["TC02", "HUMAN INTERACTION"], ["TC03", "PASS"]]);
     expect(rows[0].actual).toMatch(/\[Mobile 390×844 · chromium\] FAIL/);
@@ -393,7 +393,7 @@ describe("execution workflow", () => {
     expect(out[1][6]).toBe(new Date().toISOString().slice(0, 10));
 
     // The existing bug engine turns the verified failure into a bug referencing the external case.
-    const summary = createBugsForRun(db.sqlite, runId);
+    const summary = await createBugsForRun(db.sql, runId);
     expect(summary.created).toBe(1);
     const [bug] = await db.bugs.list({ testRunId: runId });
     expect(bug).toMatchObject({ testType: "external", section: "External Test Case", viewport: "mobile-390x844" });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import ExcelJS from "exceljs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizeCrawlUrl } from "@/lib/crawler/normalize";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { generateReportBundle } from "@/lib/reports/generate";
 import { PlaywrightPdfRenderer } from "@/lib/reports/pdf";
@@ -37,7 +37,7 @@ describe.skipIf(!browserInstalled("chromium"))("bugs, reports and regression fro
         projectId: project.id, configurationId: null, name, modules: MODULES, browsers: ["chromium"], viewports: ["desktop-1440x900"], pageIds, configurationName: null,
         options: { allowFormSubmission: false, maxLinksPerPage: 30, navigationTimeoutMs: 20_000 },
       });
-      const summary = await executeRun(run.id, { store: new SqliteEngineStore(db.sqlite), storage, log: () => undefined });
+      const summary = await executeRun(run.id, { store: new EngineStore(db.sql), storage, log: () => undefined });
       expect(summary.status).toBe("COMPLETED");
       runIds.push(run.id);
     }
@@ -83,7 +83,7 @@ describe.skipIf(!browserInstalled("chromium"))("bugs, reports and regression fro
 
   it("generates PDF, HTML and both Excel reports from the run", async () => {
     const bundle = await db.reports.requestBundle(runIds[1]);
-    const outcome = await generateReportBundle(db.sqlite, storage, bundle.id, new PlaywrightPdfRenderer());
+    const outcome = await generateReportBundle(db.sql, storage, bundle.id, new PlaywrightPdfRenderer());
     expect(outcome.files.map((f) => [f.kind, f.status, f.error ?? ""])).toEqual([
       ["TESTING_EXCEL", "READY", ""],
       ["BUG_EXCEL", "READY", ""],

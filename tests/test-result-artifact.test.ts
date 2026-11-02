@@ -131,27 +131,24 @@ describe("test results repository: isKnownArtifact", () => {
 });
 
 describe("test results repository: construction", () => {
-  it("the database provider gives the repository its connection and its SQL executor", () => {
+  it("the database provider gives the repository its shared SQL executor only", () => {
     const db = createTestDb();
     try {
       expect(constructed).toHaveLength(2); // base (beforeEach) + db
-      const [conn, sql] = constructed[1];
-      expect(conn).toBe(db.sqlite);
-      expect(sql).toBe(db.sql); // the provider's shared executor
+      expect(constructed[1]).toEqual([db.sql]);
+      expect(constructed[1][0]).toBe(db.sql); // the provider's shared executor
+      expect(constructed[1][0]).toBeInstanceOf(SqliteExecutor);
     } finally {
       void db.close();
     }
   });
 
-  it("report data loading gives the repository an executor over the same connection", async () => {
+  it("report data loading uses the executor it is given (no second executor, no raw connection)", async () => {
     constructed.length = 0;
-    await loadReportData(base.sqlite, aliceRun);
+    await loadReportData(base.sql, aliceRun);
     expect(constructed).toHaveLength(1);
-    const [conn, sql] = constructed[0];
-    expect(conn).toBe(base.sqlite);
-    expect(sql).toBeInstanceOf(SqliteExecutor);
-    // Same connection: the in-memory database is only visible through this connection.
-    expect(await (sql as SqliteExecutor).get("SELECT id FROM test_runs WHERE id = ?", [aliceRun])).toEqual({ id: aliceRun });
+    expect(constructed[0]).toEqual([base.sql]);
+    expect(constructed[0][0]).toBe(base.sql);
   });
 });
 

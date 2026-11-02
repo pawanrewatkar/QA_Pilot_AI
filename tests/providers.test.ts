@@ -6,7 +6,7 @@ import { LocalOutboxEmailProvider } from "@/lib/email/local-outbox-provider";
 import { getProviderStatuses } from "@/lib/providers/status";
 import { LocalStorageProvider } from "@/lib/storage/local-storage-provider";
 import { InvalidStorageKeyError } from "@/lib/storage/provider";
-import { SqliteJobQueue } from "@/worker/jobs/job-queue";
+import { JobQueue } from "@/worker/jobs/job-queue";
 import { createTestDb, makeTempDir } from "./helpers";
 
 describe("LocalStorageProvider", () => {
@@ -129,22 +129,22 @@ describe("LocalOutboxEmailProvider", () => {
   });
 });
 
-describe("SqliteJobQueue", () => {
+describe("JobQueue", () => {
   it("claims atomically, retries with backoff and fails after max attempts", async () => {
     const db = createTestDb();
-    const queue = new SqliteJobQueue(db.sqlite);
-    const job = queue.enqueue("crawl.project", { projectId: "p" }, { maxAttempts: 2 });
+    const queue = new JobQueue(db.sql);
+    const job = await queue.enqueue("crawl.project", { projectId: "p" }, { maxAttempts: 2 });
 
-    expect(queue.claim("w1", [])).toBeNull();
-    expect(queue.claim("w1", ["report.generate"])).toBeNull();
-    const claimed = queue.claim("w1", ["crawl.project"]);
+    expect(await queue.claim("w1", [])).toBeNull();
+    expect(await queue.claim("w1", ["report.generate"])).toBeNull();
+    const claimed = await queue.claim("w1", ["crawl.project"]);
     expect(claimed).toMatchObject({ id: job.id, status: "RUNNING", attempts: 1 });
-    expect(queue.claim("w2", ["crawl.project"])).toBeNull();
+    expect(await queue.claim("w2", ["crawl.project"])).toBeNull();
 
-    expect(queue.fail(job.id, "boom")).toMatchObject({ status: "PENDING", lastError: "boom" });
+    expect(await queue.fail(job.id, "boom")).toMatchObject({ status: "PENDING", lastError: "boom" });
     db.sqlite.prepare("UPDATE jobs SET run_after = ? WHERE id = ?").run(new Date(0).toISOString(), job.id);
-    queue.claim("w1", ["crawl.project"]);
-    expect(queue.fail(job.id, "boom again")).toMatchObject({ status: "FAILED", attempts: 2 });
+    await queue.claim("w1", ["crawl.project"]);
+    expect(await queue.fail(job.id, "boom again")).toMatchObject({ status: "FAILED", attempts: 2 });
     await db.close();
   });
 });

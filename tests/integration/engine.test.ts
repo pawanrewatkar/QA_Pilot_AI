@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizeCrawlUrl } from "@/lib/crawler/normalize";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { LocalStorageProvider } from "@/lib/storage/local-storage-provider";
 import type { TestResultRecord } from "@/types";
@@ -49,7 +49,7 @@ describe.skipIf(!browserInstalled("chromium"))("test engine against a real site 
       options: { allowFormSubmission: false, maxLinksPerPage: 100, navigationTimeoutMs: 15_000 },
     });
     runId = run.id;
-    summary = await executeRun(run.id, { store: new SqliteEngineStore(db.sqlite), storage: new LocalStorageProvider(root), log: () => undefined });
+    summary = await executeRun(run.id, { store: new EngineStore(db.sql), storage: new LocalStorageProvider(root), log: () => undefined });
     results = await db.testResults.listByRun(run.id, { limit: 2000 });
   }, INTEGRATION_TIMEOUT * 2);
 
@@ -180,7 +180,7 @@ describe("cross-browser execution", () => {
           projectId: project.id, configurationId: null, name: browser, modules: ["tabs", "accordion"], browsers: [browser], viewports: ["desktop-1366x768"],
           pageIds: [page.id], configurationName: null, options: { allowFormSubmission: false, maxLinksPerPage: 20, navigationTimeoutMs: 20_000 },
         });
-        const summary = await executeRun(run.id, { store: new SqliteEngineStore(db.sqlite), storage: new LocalStorageProvider(root), log: () => undefined });
+        const summary = await executeRun(run.id, { store: new EngineStore(db.sql), storage: new LocalStorageProvider(root), log: () => undefined });
         const results = await db.testResults.listByRun(run.id);
         expect(summary.status).toBe("COMPLETED");
         expect(results.find((r) => r.module === "page-load")?.status).toBe("PASS");
@@ -206,7 +206,7 @@ describe("cross-browser execution", () => {
         pageIds: [page.id], configurationName: null, options: { allowFormSubmission: false, maxLinksPerPage: 20, navigationTimeoutMs: 5_000 },
       });
       const summary = await executeRun(run.id, {
-        store: new SqliteEngineStore(db.sqlite), storage: new LocalStorageProvider(root), log: () => undefined,
+        store: new EngineStore(db.sql), storage: new LocalStorageProvider(root), log: () => undefined,
         launch: async () => { throw new Error("Executable doesn't exist"); },
       });
       const results = await db.testResults.listByRun(run.id);

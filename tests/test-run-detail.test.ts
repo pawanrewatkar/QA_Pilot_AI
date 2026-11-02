@@ -135,8 +135,8 @@ describe("test runs repository: getDetail", () => {
   it("matches the synchronous helper used by reports", async () => {
     const r = await run(aliceProject);
     results(r.id, "PASS", "FAIL");
-    expect(await base.testRuns.getDetail(r.id)).toEqual(runDetail(base.sqlite, r.id));
-    expect(runDetail(base.sqlite, "missing")).toBeNull();
+    expect(await base.testRuns.getDetail(r.id)).toEqual(await runDetail(base.sql, r.id));
+    expect(await runDetail(base.sql, "missing")).toBeNull();
   });
 });
 
@@ -155,7 +155,7 @@ describe("test runs repository: countsByRun", () => {
     const counts = await base.testRuns.countsByRun([b.id, a.id, b.id]);
     expect(Object.keys(counts)).toEqual([b.id, a.id]);
     expect(counts).toEqual({ [a.id]: { ...ZERO, PASS: 1, FAIL: 2 }, [b.id]: { ...ZERO, WARNING: 1 } });
-    expect(counts).toEqual(countsFor(base.sqlite, [b.id, a.id, b.id])); // same as the helper used by history
+    expect(counts).toEqual(await countsFor(base.sql, [b.id, a.id, b.id])); // same as the helper used by history
   });
 });
 

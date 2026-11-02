@@ -254,8 +254,8 @@ describe("run history: listRuns", () => {
     expect(await bob.history.countRuns()).toBe((await bob.history.listRuns()).length);
   });
 
-  it("is wired to the provider's connection and SQL executor", () => {
-    expect(Reflect.get(base.history, "db")).toBe(base.sqlite);
+  it("is wired to the provider's SQL executor (no raw connection)", () => {
+    expect(Reflect.get(base.history, "db")).toBeUndefined();
     expect(Reflect.get(base.history, "sql")).toBe(base.sql);
   });
 

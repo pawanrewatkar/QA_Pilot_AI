@@ -1,5 +1,5 @@
 import { findViewport, VIEWPORT_KIND_LABELS } from "@/lib/constants/testing";
-import type { SqliteDatabase } from "@/lib/database/local/sqlite-client";
+import type { SqlExecutor } from "@/lib/database/sql/executor";
 import type { StorageProvider } from "@/lib/storage/provider";
 import { externalResultFileName, writeResults, type RowResult } from "./writer";
 import { aggregateStatus } from "./status";
@@ -26,25 +26,25 @@ export const externalOutputPrefix = (runId: string) => `runs/${runId}/external`;
  * the standard results (evidence, bugs), and writes the result workbook. Never throws; a workbook
  * error is stored on the execution and shown in the UI.
  */
-export async function finalizeExternalRun(db: SqliteDatabase, storage: StorageProvider, runId: string, reason: string | null = null): Promise<void> {
-  const exec = db.prepare("SELECT * FROM external_test_executions WHERE test_run_id = ?").get(runId) as Row | undefined;
+export async function finalizeExternalRun(sql: SqlExecutor, storage: StorageProvider, runId: string, reason: string | null = null): Promise<void> {
+  const exec = await sql.get<Row>("SELECT * FROM external_test_executions WHERE test_run_id = ?", [runId]);
   if (!exec) return;
-  const cases = db.prepare("SELECT * FROM external_test_cases WHERE test_run_id = ? ORDER BY row_number").all(runId) as Row[];
-  const observations = db.prepare("SELECT * FROM external_test_observations WHERE test_run_id = ? ORDER BY observed_at").all(runId) as Row[];
+  const cases = await sql.all<Row>("SELECT * FROM external_test_cases WHERE test_run_id = ? ORDER BY row_number", [runId]);
+  const observations = await sql.all<Row>("SELECT * FROM external_test_observations WHERE test_run_id = ? ORDER BY observed_at", [runId]);
 
   // Observation ↔ standard test result (same case key, browser and viewport).
-  db.prepare(
+  await sql.run(
     `UPDATE external_test_observations AS o SET test_result_id = (
        SELECT tr.id FROM test_results tr JOIN test_cases tc ON tc.id = tr.test_case_id JOIN external_test_cases c ON c.id = o.external_case_id
        WHERE tr.test_run_id = o.test_run_id AND tc.module = 'external' AND tc.case_key LIKE '%|external:row-' || c.row_number
          AND tr.browser = o.browser AND tr.viewport = o.viewport
        ORDER BY tr.created_at DESC LIMIT 1)
      WHERE o.test_run_id = ?`,
-  ).run(runId);
+    [runId],
+  );
 
   const results: RowResult[] = [];
-  const update = db.prepare("UPDATE external_test_cases SET status = ?, actual_result = ?, executed_at = ? WHERE id = ?");
-  db.transaction(() => {
+  await sql.transaction(async (tx) => {
     for (const c of cases) {
       const obs = observations
         .filter((o) => o.external_case_id === c.id)
@@ -52,10 +52,10 @@ export async function finalizeExternalRun(db: SqliteDatabase, storage: StoragePr
       const status = obs.length ? aggregateStatus(obs.map((o) => o.status)) : "NOT EXECUTED";
       const actual = obs.length ? aggregateActual(obs) : (reason ?? "This test case was not executed because the website could not be tested in any selected browser or device (see the run's page-load result).");
       const executedAt = obs.length ? obs[obs.length - 1].at : new Date().toISOString();
-      update.run(status, actual.slice(0, 32_000), executedAt, c.id);
+      await tx.run("UPDATE external_test_cases SET status = ?, actual_result = ?, executed_at = ? WHERE id = ?", [status, actual.slice(0, 32_000), executedAt, String(c.id)]);
       results.push({ rowNumber: Number(c.row_number), status, actual: actual.slice(0, 32_000), executedAt: new Date(executedAt) });
     }
-  })();
+  });
 
   try {
     const source = await storage.get(String(exec.source_storage_key));
@@ -71,13 +71,16 @@ export async function finalizeExternalRun(db: SqliteDatabase, storage: StoragePr
     const fileName = externalResultFileName(String(exec.website_url), new Date());
     const key = `${externalOutputPrefix(runId)}/${fileName}`;
     await storage.put(key, out.bytes, { contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    db.prepare("UPDATE external_test_executions SET output_storage_key = ?, output_file_name = ?, result_columns = ?, output_error = NULL WHERE test_run_id = ?").run(
+    await sql.run("UPDATE external_test_executions SET output_storage_key = ?, output_file_name = ?, result_columns = ?, output_error = NULL WHERE test_run_id = ?", [
       key,
       fileName,
       JSON.stringify({ sheet: out.sheet, set: out.columns.set, actual: out.columns.actual.header, status: out.columns.status.header, date: out.columns.date.header }),
       runId,
-    );
+    ]);
   } catch (error) {
-    db.prepare("UPDATE external_test_executions SET output_error = ? WHERE test_run_id = ?").run(`The result workbook could not be written: ${error instanceof Error ? error.message : String(error)}`.slice(0, 2000), runId);
+    await sql.run("UPDATE external_test_executions SET output_error = ? WHERE test_run_id = ?", [
+      `The result workbook could not be written: ${error instanceof Error ? error.message : String(error)}`.slice(0, 2000),
+      runId,
+    ]);
   }
 }

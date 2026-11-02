@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBugsForRun } from "@/lib/bugs/engine";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { EXPECTED_TABLES } from "@/lib/database/schema";
 import { generateReportBundle } from "@/lib/reports/generate";
@@ -28,24 +28,24 @@ describe("project deletion and run isolation", () => {
   async function seedProject(name: string) {
     const project = await db.projects.create(projectInput({ name, websiteUrl: `https://${name}.test/` }));
     const { page } = await db.pages.addManual(project.id, `https://${name}.test/`, `https://${name}.test/`);
-    const store = new SqliteEngineStore(db.sqlite);
+    const store = new EngineStore(db.sql);
     const runIds: string[] = [];
     for (let i = 0; i < 2; i++) {
       const run = await db.testRuns.createAndEnqueue({ projectId: project.id, configurationId: null, name: `${name} ${i}`, modules: ["links"], browsers: ["chromium"], viewports: [VIEWPORT], pageIds: [page.id], configurationName: null, options: baseOptions });
       db.sqlite.prepare("UPDATE jobs SET status = 'COMPLETED' WHERE json_extract(payload, '$.testRunId') = ?").run(run.id);
-      store.markRunRunning(run.id, 1);
-      const rp = store.ensureRunPage(run.id, page.id);
+      await store.markRunRunning(run.id, 1);
+      const rp = await store.ensureRunPage(run.id, page.id);
       const key = `runs/${run.id}/${page.id}/shot.png`;
       await storage.put(key, new Uint8Array([1, 2, 3]));
-      store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: "chromium", viewport: VIEWPORT, width: 1, height: 1 });
-      store.recordOutcome({ runId: run.id, projectId: project.id, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport: VIEWPORT, outcome: finalizeOutcome(outcome.fail(failSpec, "404", [{ type: "screenshot", label: "s", storageKey: key }])) });
-      store.finishRunPage(rp, "COMPLETED", null);
-      store.finishRun(run.id, "COMPLETED", null);
-      createBugsForRun(db.sqlite, run.id);
+      await store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: "chromium", viewport: VIEWPORT, width: 1, height: 1 });
+      await store.recordOutcome({ runId: run.id, projectId: project.id, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport: VIEWPORT, outcome: finalizeOutcome(outcome.fail(failSpec, "404", [{ type: "screenshot", label: "s", storageKey: key }])) });
+      await store.finishRunPage(rp, "COMPLETED", null);
+      await store.finishRun(run.id, "COMPLETED", null);
+      await createBugsForRun(db.sql, run.id);
       runIds.push(run.id);
     }
     const bundle = await db.reports.requestBundle(runIds[1]);
-    await generateReportBundle(db.sqlite, storage, bundle.id, { render: async () => new TextEncoder().encode("%PDF-1.4") });
+    await generateReportBundle(db.sql, storage, bundle.id, { render: async () => new TextEncoder().encode("%PDF-1.4") });
     return { project, runIds, bundle };
   }
 
@@ -109,7 +109,7 @@ describe("run execution integration", () => {
   it("records NOT EXECUTED for a browser that cannot start and still completes the run", async () => {
     const run = await queuedRun(baseOptions, ["chromium", "firefox"]);
     const summary = await executeRun(run.id, {
-      store: new SqliteEngineStore(db.sqlite),
+      store: new EngineStore(db.sql),
       storage: new LocalStorageProvider(makeTempDir()),
       log: () => undefined,
       launch: async () => {
@@ -126,20 +126,20 @@ describe("run execution integration", () => {
 
   it("queues the report formats selected for the run when it completes", async () => {
     const run = await queuedRun({ ...baseOptions, reports: { formats: ["PDF", "EXCEL"] } });
-    await executeRun(run.id, { store: new SqliteEngineStore(db.sqlite), storage: new LocalStorageProvider(makeTempDir()), log: () => undefined, launch: async () => { throw new Error("no browser"); } });
+    await executeRun(run.id, { store: new EngineStore(db.sql), storage: new LocalStorageProvider(makeTempDir()), log: () => undefined, launch: async () => { throw new Error("no browser"); } });
     const bundles = await db.reports.listBundles({ testRunId: run.id });
     expect(bundles).toHaveLength(1);
     const job = db.sqlite.prepare("SELECT payload FROM jobs WHERE type = 'report.generate'").get() as { payload: string };
     expect(JSON.parse(job.payload)).toEqual({ reportBundleId: bundles[0].id, kinds: ["PDF", "TESTING_EXCEL", "BUG_EXCEL"] });
 
     const storage = new LocalStorageProvider(makeTempDir());
-    await generateReportBundle(db.sqlite, storage, bundles[0].id, { render: async () => new TextEncoder().encode("%PDF-1.4") }, ["PDF", "TESTING_EXCEL", "BUG_EXCEL"]);
+    await generateReportBundle(db.sql, storage, bundles[0].id, { render: async () => new TextEncoder().encode("%PDF-1.4") }, ["PDF", "TESTING_EXCEL", "BUG_EXCEL"]);
     expect((await db.reports.getBundle(bundles[0].id))!.files.map((f) => f.kind)).toEqual(["PDF", "TESTING_EXCEL", "BUG_EXCEL"]);
   });
 
   it("does not queue a report when none was selected", async () => {
     const run = await queuedRun(baseOptions);
-    await executeRun(run.id, { store: new SqliteEngineStore(db.sqlite), storage: new LocalStorageProvider(makeTempDir()), log: () => undefined, launch: async () => { throw new Error("no browser"); } });
+    await executeRun(run.id, { store: new EngineStore(db.sql), storage: new LocalStorageProvider(makeTempDir()), log: () => undefined, launch: async () => { throw new Error("no browser"); } });
     expect(await db.reports.countBundles()).toBe(0);
   });
 });

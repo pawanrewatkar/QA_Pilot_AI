@@ -14,7 +14,7 @@ import type { SqlExecutor } from "@/lib/database/sql/executor";
 import { DEFAULT_REPORT_SECTIONS } from "@/lib/constants/testing";
 import type { TestConfigurationInput } from "@/types";
 import { createTestDb } from "./helpers";
-import { createPgTestDatabase, noRawConnection, sqliteSchema, type PgTestDatabase } from "./support/postgres";
+import { createPgTestDatabase, sqliteSchema, type PgTestDatabase } from "./support/postgres";
 
 /**
  * Compatibility of the repository methods already on SqlExecutor, on SQLite and on PostgreSQL (PGlite, in process;
@@ -69,14 +69,14 @@ function postgresBackend(sql: SqlExecutor): Backend {
     sql,
     documents: new LocalDocumentRepository(sql),
     testConfigurations: new LocalTestConfigurationRepository(sql),
-    testRuns: new LocalTestRunRepository(noRawConnection, sql),
+    testRuns: new LocalTestRunRepository(sql),
     activity: new LocalActivityRepository(sql),
     dashboard: new LocalDashboardRepository(sql),
     ownership: new LocalOwnershipRepository(sql),
     testCases: new LocalTestCaseRepository(sql),
     workers: new LocalWorkerRepository(sql),
-    testResults: new LocalTestResultRepository(noRawConnection, sql),
-    history: new LocalHistoryRepository(noRawConnection, sql),
+    testResults: new LocalTestResultRepository(sql),
+    history: new LocalHistoryRepository(sql),
   };
 }
 

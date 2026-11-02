@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IMPLEMENTED_MODULE_IDS } from "@/lib/constants/testing";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import type { FormField } from "@/lib/forms/analyze";
 import { safeValueFor } from "@/lib/forms/test-data";
@@ -197,10 +197,10 @@ describe("crawl and test-run validation", () => {
 
 describe("engine persistence and services", () => {
   let db: LocalDatabaseProvider;
-  let store: SqliteEngineStore;
+  let store: EngineStore;
   beforeEach(() => {
     db = createTestDb();
-    store = new SqliteEngineStore(db.sqlite);
+    store = new EngineStore(db.sql);
   });
   afterEach(async () => db.close());
 
@@ -249,9 +249,9 @@ describe("engine persistence and services", () => {
   it("stores one case per page and check, with one result per browser/viewport", async () => {
     const { project, pages } = await setup();
     const run = await db.testRuns.createAndEnqueue({ projectId: project.id, configurationId: null, name: null, modules: ["tabs"], browsers: ["chromium", "firefox"], viewports: ["desktop-1366x768"], pageIds: [pages[0].id], configurationName: null, options: { allowFormSubmission: false, maxLinksPerPage: 10, navigationTimeoutMs: 10_000 } });
-    const runPageId = store.ensureRunPage(run.id, pages[0].id);
+    const runPageId = await store.ensureRunPage(run.id, pages[0].id);
     for (const browser of ["chromium", "firefox"] as const) {
-      store.recordOutcome({ runId: run.id, projectId: project.id, pageId: pages[0].id, pageUrl: pages[0].url, runPageId, browser, viewport: "desktop-1366x768", outcome: finalizeOutcome(outcome.pass(spec, "ok", ["verified"])) });
+      await store.recordOutcome({ runId: run.id, projectId: project.id, pageId: pages[0].id, pageUrl: pages[0].url, runPageId, browser, viewport: "desktop-1366x768", outcome: finalizeOutcome(outcome.pass(spec, "ok", ["verified"])) });
     }
     const cases = await db.testCases.list({ testRunId: run.id });
     expect(cases).toHaveLength(1);
@@ -262,9 +262,9 @@ describe("engine persistence and services", () => {
   it("remembers form submissions so they are never repeated", async () => {
     const { project, pages } = await setup();
     const run = await db.testRuns.createAndEnqueue({ projectId: project.id, configurationId: null, name: null, modules: ["newsletter"], browsers: ["chromium"], viewports: ["desktop-1366x768"], pageIds: [pages[0].id], configurationName: null, options: { allowFormSubmission: true, maxLinksPerPage: 10, navigationTimeoutMs: 10_000 } });
-    expect(store.hasFormSubmission(project.id, "newsletter", "fp")).toBe(false);
-    store.recordFormSubmission(project.id, run.id, "newsletter", "fp", "https://site.test/");
-    expect(store.hasFormSubmission(project.id, "newsletter", "fp")).toBe(true);
+    expect(await store.hasFormSubmission(project.id, "newsletter", "fp")).toBe(false);
+    await store.recordFormSubmission(project.id, run.id, "newsletter", "fp", "https://site.test/");
+    expect(await store.hasFormSubmission(project.id, "newsletter", "fp")).toBe(true);
   });
 
   it("fails work abandoned by a dead worker and reports worker status", async () => {
@@ -273,9 +273,9 @@ describe("engine persistence and services", () => {
     db.sqlite.prepare("UPDATE jobs SET status = 'RUNNING', locked_by = 'dead-worker'").run();
     db.sqlite.prepare("UPDATE test_runs SET status = 'RUNNING'").run();
     expect((await db.workers.status()).online).toBe(false);
-    store.heartbeat("live", "host", 1, ["run.execute"], new Date().toISOString());
+    await store.heartbeat("live", "host", 1, ["run.execute"], new Date().toISOString());
     expect(await db.workers.status()).toMatchObject({ online: true, handlers: ["run.execute"] });
-    expect(store.recoverAbandonedWork(30_000)).toBe(1);
+    expect(await store.recoverAbandonedWork(30_000)).toBe(1);
     expect((await db.testRuns.getDetail(run.id))).toMatchObject({ status: "FAILED", errorMessage: expect.stringMatching(/worker stopped/) });
   });
 });

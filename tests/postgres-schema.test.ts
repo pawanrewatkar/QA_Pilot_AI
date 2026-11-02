@@ -4,7 +4,7 @@ import { LocalActivityRepository, LocalDocumentRepository, LocalTestRunRepositor
 import { applyMigrations, checksum, loadMigrations, migrationStatus, MigrationError, type Migration } from "@/lib/database/postgres/migrator";
 import { importSqliteIntoPostgres, preflightSqlite, sqliteTables, validateImport } from "@/lib/database/postgres/sqlite-import";
 import { createTestDb, projectInput } from "./helpers";
-import { createPgTestDatabase, noRawConnection, sqliteSchema, type PgTestDatabase } from "./support/postgres";
+import { createPgTestDatabase, sqliteSchema, type PgTestDatabase } from "./support/postgres";
 
 /**
  * Versioned PostgreSQL schema (lib/database/postgres/migrations), its migrator, and the SQLite → PostgreSQL data
@@ -54,7 +54,7 @@ describe("migrator", () => {
     const status = await migrationStatus(pg.conn);
     expect(status.pending).toEqual([]);
     expect(status.applied).toMatchObject([{ version: 1, name: "initial_schema", checksum: loadMigrations()[0].checksum }]);
-  });
+  }, 30_000); // several PGlite databases; slow when the browser integration tests share the CPU
 
   it("rolls back a failing migration completely, keeps earlier ones, and stops", async () => {
     const pg = await pgDb([]);
@@ -199,7 +199,7 @@ describe("SQLite → PostgreSQL import", () => {
     // Ties on created_at (same fake time) come back in the same order on both databases.
     const docs = new LocalDocumentRepository(pg.sql);
     expect((await docs.listByProject(alice.id)).map((d) => d.fileName)).toEqual((await lite.documents.listByProject(alice.id)).map((d) => d.fileName));
-    expect((await new LocalTestRunRepository(noRawConnection, pg.sql).list()).map((r) => r.id)).toEqual((await lite.testRuns.list()).map((r) => r.id));
+    expect((await new LocalTestRunRepository(pg.sql).list()).map((r) => r.id)).toEqual((await lite.testRuns.list()).map((r) => r.id));
     expect((await new LocalActivityRepository(pg.sql).list()).map((a) => a.summary)).toEqual(["second", "first"]);
 
     // New rows sort after every imported row (identity sequences moved past the imported rowids).

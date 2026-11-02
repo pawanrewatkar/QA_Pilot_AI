@@ -1,9 +1,9 @@
 import { WebsiteCrawler, type PageLoader } from "@/lib/crawler/crawler";
 import { PlaywrightPageLoader } from "@/lib/crawler/playwright-loader";
-import type { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import type { EngineStore } from "@/lib/database/local/engine-store";
 
 export interface CrawlJobDeps {
-  store: SqliteEngineStore;
+  store: EngineStore;
   log: (message: string) => void;
   signal?: AbortSignal;
   /** Overridable for tests. */
@@ -13,39 +13,40 @@ export interface CrawlJobDeps {
 /** Runs one crawl_runs record to completion, persisting pages and progress as it goes. */
 export async function executeCrawl(crawlRunId: string, deps: CrawlJobDeps) {
   const { store, log } = deps;
-  const crawl = store.getCrawlRun(crawlRunId);
+  const crawl = await store.getCrawlRun(crawlRunId);
   if (!crawl) throw new Error(`Crawl run ${crawlRunId} not found`);
   if (crawl.status !== "PENDING") {
     log(`Crawl ${crawlRunId} is ${crawl.status}; skipping`);
     return;
   }
-  store.markCrawlRunning(crawlRunId);
+  await store.markCrawlRunning(crawlRunId);
   const loader = deps.loader ?? new PlaywrightPageLoader();
   const crawler = new WebsiteCrawler({ loader });
   let lastProgressWrite = 0;
   try {
+    // The crawler awaits each hook, so every write completes before the crawl continues.
     const summary = await crawler.crawl(crawl.startUrl, crawl.config, {
-      onStart: ({ resolvedStartUrl, robots, sitemapUrls }) => {
-        store.setCrawlResolvedUrl(crawlRunId, resolvedStartUrl);
+      onStart: async ({ resolvedStartUrl, robots, sitemapUrls }) => {
+        await store.setCrawlResolvedUrl(crawlRunId, resolvedStartUrl);
         log(`Crawl ${crawlRunId}: start ${resolvedStartUrl} (robots.txt ${robots ? "found" : "not found"}, ${sitemapUrls} sitemap URLs)`);
       },
-      onPage: (page) => {
-        store.upsertCrawledPage(crawl.projectId, crawlRunId, page);
+      onPage: async (page) => {
+        await store.upsertCrawledPage(crawl.projectId, crawlRunId, page);
       },
-      onProgress: (p) => {
+      onProgress: async (p) => {
         // Throttle writes; the UI polls about once per second.
         const t = Date.now();
         if (t - lastProgressWrite > 300 || p.currentUrl === null) {
           lastProgressWrite = t;
-          store.updateCrawlProgress(crawlRunId, p);
+          await store.updateCrawlProgress(crawlRunId, p);
         }
       },
-      shouldCancel: () => !!deps.signal?.aborted || store.isCrawlCancelRequested(crawlRunId),
+      shouldCancel: async () => !!deps.signal?.aborted || (await store.isCrawlCancelRequested(crawlRunId)),
     });
-    store.updateCrawlProgress(crawlRunId, summary.progress);
-    store.finishCrawl(crawlRunId, summary.status, summary.error);
+    await store.updateCrawlProgress(crawlRunId, summary.progress);
+    await store.finishCrawl(crawlRunId, summary.status, summary.error);
     const p = summary.progress;
-    store.recordActivity(
+    await store.recordActivity(
       crawl.projectId,
       "crawl",
       crawlRunId,
@@ -57,8 +58,8 @@ export async function executeCrawl(crawlRunId: string, deps: CrawlJobDeps) {
     log(`Crawl ${crawlRunId} ${summary.status}: ${p.crawled} crawled, ${p.failed} failed, ${p.skipped} skipped`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    store.finishCrawl(crawlRunId, "FAILED", message);
-    store.recordActivity(crawl.projectId, "crawl", crawlRunId, "failed", `Crawl failed: ${message.slice(0, 200)}`);
+    await store.finishCrawl(crawlRunId, "FAILED", message);
+    await store.recordActivity(crawl.projectId, "crawl", crawlRunId, "failed", `Crawl failed: ${message.slice(0, 200)}`);
     throw error;
   } finally {
     await loader.close?.();

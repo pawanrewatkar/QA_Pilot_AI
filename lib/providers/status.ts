@@ -39,11 +39,14 @@ export function getProviderStatuses(env: AppEnv): ProviderStatus[] {
       ? {
           id: "database",
           name: "Database",
-          implementation: "SupabaseDatabaseProvider",
-          state: has(env.SUPABASE_URL) && has(env.SUPABASE_SERVICE_ROLE_KEY) ? "CONFIGURED" : "NOT_CONFIGURED",
-          availability: "PLANNED",
-          detail: "Supabase support is not implemented yet. Set DATABASE_PROVIDER=local.",
-          envKeys: ["DATABASE_PROVIDER", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"],
+          implementation: "PostgresDatabaseProvider (Supabase PostgreSQL)",
+          state: has(env.DATABASE_URL) ? "CONFIGURED" : "NOT_CONFIGURED",
+          availability: "ACTIVE",
+          // Names only: the connection string contains the database password and is never shown.
+          detail: has(env.DATABASE_URL)
+            ? "PostgreSQL through DATABASE_URL (server-side only). The schema is applied separately with scripts/pg-migrate.ts."
+            : "DATABASE_URL is not set: the app cannot open the database.",
+          envKeys: ["DATABASE_PROVIDER", "DATABASE_URL", "DATABASE_POOL_MAX", "DATABASE_CONNECT_TIMEOUT_MS", "DATABASE_QUERY_TIMEOUT_MS", "DATABASE_SSL_CA"],
         }
       : {
           id: "database",
@@ -54,15 +57,26 @@ export function getProviderStatuses(env: AppEnv): ProviderStatus[] {
           detail: `SQLite file at ${env.DATABASE_PATH}.`,
           envKeys: ["DATABASE_PROVIDER", "DATABASE_PATH"],
         },
-    {
-      id: "storage",
-      name: "Storage",
-      implementation: "LocalStorageProvider (filesystem)",
-      state: "LOCAL",
-      availability: "ACTIVE",
-      detail: `Documents, screenshots and reports stored under ${env.STORAGE_PATH}.`,
-      envKeys: ["STORAGE_PROVIDER", "STORAGE_PATH", "MAX_UPLOAD_MB"],
-    },
+    env.STORAGE_PROVIDER === "supabase"
+      ? {
+          id: "storage",
+          name: "Storage",
+          implementation: "SupabaseStorageProvider (private bucket)",
+          state: "CONFIGURED",
+          availability: "ACTIVE",
+          // Names only: the project URL and key are never shown.
+          detail: `Documents, screenshots and reports stored in the private bucket "${env.STORAGE_BUCKET}"; downloads go through the app, which checks ownership.`,
+          envKeys: ["STORAGE_PROVIDER", "SUPABASE_URL", "SUPABASE_SECRET_KEY", "STORAGE_BUCKET", "STORAGE_MAX_OBJECT_MB"],
+        }
+      : {
+          id: "storage",
+          name: "Storage",
+          implementation: "LocalStorageProvider (filesystem)",
+          state: "LOCAL",
+          availability: "ACTIVE",
+          detail: `Documents, screenshots and reports stored under ${env.STORAGE_PATH}.`,
+          envKeys: ["STORAGE_PROVIDER", "STORAGE_PATH", "MAX_UPLOAD_MB"],
+        },
     {
       id: "figma",
       name: "Figma",

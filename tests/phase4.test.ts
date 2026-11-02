@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bugFingerprint, classifySeverity, priorityFor } from "@/lib/bugs/classify";
 import { DeterministicDuplicateDetector } from "@/lib/bugs/duplicates";
 import { createBugsForRun } from "@/lib/bugs/engine";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { classifyPair, compareFindingSets, comparePerformance, compareResults, type KeyedResult } from "@/lib/regression/compare";
 import { loadReportData, reportFileNames } from "@/lib/reports/data";
@@ -27,7 +27,7 @@ const consoleSpec: CaseSpec = { key: "console:errors", module: "console", title:
 
 interface Seeded {
   db: LocalDatabaseProvider;
-  store: SqliteEngineStore;
+  store: EngineStore;
   project: Project;
   page: PageRecord;
 }
@@ -35,7 +35,7 @@ interface Seeded {
 async function seed(db: LocalDatabaseProvider): Promise<Seeded> {
   const project = await db.projects.create(projectInput({ name: "Acme", websiteUrl: "https://www.acme.test/" }));
   const { page } = await db.pages.addManual(project.id, "https://www.acme.test/", "https://www.acme.test/");
-  return { db, store: new SqliteEngineStore(db.sqlite), project, page };
+  return { db, store: new EngineStore(db.sql), project, page };
 }
 
 type Status = "PASS" | "FAIL" | "WARNING" | "NOT EXECUTED";
@@ -45,12 +45,12 @@ async function runWith(s: Seeded, statuses: { spec: CaseSpec; status: Status; ac
   const browser = options.browser ?? "chromium";
   const run = await s.db.testRuns.createAndEnqueue({ projectId: s.project.id, configurationId: null, name: options.name ?? null, modules: [...new Set(statuses.map((x) => x.spec.module))], browsers: [browser], viewports: [VIEWPORT], pageIds: [s.page.id], configurationName: null, options: { allowFormSubmission: false, maxLinksPerPage: 10, navigationTimeoutMs: 1000 } });
   s.db.sqlite.prepare("UPDATE jobs SET status = 'COMPLETED'").run();
-  s.store.markRunRunning(run.id, 1);
-  const rp = s.store.ensureRunPage(run.id, s.page.id);
+  await s.store.markRunRunning(run.id, 1);
+  const rp = await s.store.ensureRunPage(run.id, s.page.id);
   let shotKey: string | null = null;
   if (options.screenshot !== false) {
     shotKey = `runs/${run.id}/${s.page.id}/${browser}-${VIEWPORT}/01-viewport.png`;
-    s.store.saveScreenshot({ runId: run.id, pageId: s.page.id, storageKey: shotKey, browser, viewport: VIEWPORT, width: 1366, height: 768, kind: "VIEWPORT", label: "Broken link" });
+    await s.store.saveScreenshot({ runId: run.id, pageId: s.page.id, storageKey: shotKey, browser, viewport: VIEWPORT, width: 1366, height: 768, kind: "VIEWPORT", label: "Broken link" });
   }
   for (const x of statuses) {
     const actual = x.actual ?? `${x.status} observed`;
@@ -62,10 +62,10 @@ async function runWith(s: Seeded, statuses: { spec: CaseSpec; status: Status; ac
           : x.status === "WARNING"
             ? outcome.warn(x.spec, actual)
             : outcome.notExecuted(x.spec, actual);
-    s.store.recordOutcome({ runId: run.id, projectId: s.project.id, pageId: s.page.id, pageUrl: s.page.url, runPageId: rp, browser, viewport: VIEWPORT, outcome: finalizeOutcome(o) });
+    await s.store.recordOutcome({ runId: run.id, projectId: s.project.id, pageId: s.page.id, pageUrl: s.page.url, runPageId: rp, browser, viewport: VIEWPORT, outcome: finalizeOutcome(o) });
   }
-  s.store.finishRunPage(rp, "COMPLETED", null);
-  s.store.finishRun(run.id, "COMPLETED", null);
+  await s.store.finishRunPage(rp, "COMPLETED", null);
+  await s.store.finishRun(run.id, "COMPLETED", null);
   return { runId: run.id, shotKey };
 }
 
@@ -145,7 +145,7 @@ describe("bug engine", () => {
       { spec: consoleSpec, status: "NOT EXECUTED" },
     ]);
     // The run executor creates bugs at the end of a run; tests call the engine directly.
-    const summary = createBugsForRun(db.sqlite, runId);
+    const summary = await createBugsForRun(db.sql, runId);
     expect(summary).toMatchObject({ failures: 1, created: 1, updated: 0 });
 
     const bugs = await db.bugs.list({ projectId: s.project.id });
@@ -166,15 +166,15 @@ describe("bug engine", () => {
 
   it("is idempotent and merges recurrences into the same bug", async () => {
     const r1 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }]);
-    createBugsForRun(db.sqlite, r1.runId);
-    const again = createBugsForRun(db.sqlite, r1.runId);
+    await createBugsForRun(db.sql, r1.runId);
+    const again = await createBugsForRun(db.sql, r1.runId);
     expect(again.created).toBe(0);
     let [bug] = await db.bugs.list();
     expect(bug.occurrenceCount).toBe(1);
     expect((await db.bugs.getDetail(bug.id))!.evidence.filter((e) => e.type === "SCREENSHOT" && e.screenshotKind === "VIEWPORT")).toHaveLength(1);
 
     const r2 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }], { browser: "firefox" });
-    const sum2 = createBugsForRun(db.sqlite, r2.runId);
+    const sum2 = await createBugsForRun(db.sql, r2.runId);
     expect(sum2).toMatchObject({ created: 0, updated: 1 });
     [bug] = await db.bugs.list();
     expect(await db.bugs.count()).toBe(1);
@@ -187,17 +187,17 @@ describe("bug engine", () => {
 
   it("never resolves automatically, and reopens a resolved bug when the failure recurs", async () => {
     const r1 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }]);
-    createBugsForRun(db.sqlite, r1.runId);
+    await createBugsForRun(db.sql, r1.runId);
     const [bug] = await db.bugs.list();
 
     // A later passing run does not change the bug's status.
     const r2 = await runWith(s, [{ spec: linkSpec, status: "PASS" }]);
-    createBugsForRun(db.sqlite, r2.runId);
+    await createBugsForRun(db.sql, r2.runId);
     expect((await db.bugs.getDetail(bug.id))!.status).toBe("OPEN");
 
     await db.bugs.updateStatus(bug.id, "RESOLVED", "Fixed in deploy 42");
     const r3 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }]);
-    const sum = createBugsForRun(db.sqlite, r3.runId);
+    const sum = await createBugsForRun(db.sql, r3.runId);
     expect(sum.reopened).toBe(1);
     const d = (await db.bugs.getDetail(bug.id))!;
     expect(d.status).toBe("REOPENED");
@@ -210,7 +210,7 @@ describe("bug engine", () => {
 
   it("filters bugs by severity, status, test type, device and search", async () => {
     const r1 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }, { spec: consoleSpec, status: "FAIL" }]);
-    createBugsForRun(db.sqlite, r1.runId);
+    await createBugsForRun(db.sql, r1.runId);
     expect(await db.bugs.count({ testType: "console" })).toBe(1);
     expect(await db.bugs.count({ device: "desktop" })).toBe(2);
     expect(await db.bugs.count({ device: "mobile" })).toBe(0);
@@ -266,9 +266,9 @@ describe("regression comparison", () => {
     const db = createTestDb();
     const s = await seed(db);
     const r1 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }, { spec: seoSpec, status: "PASS" }, { spec: consoleSpec, status: "FAIL" }], { name: "Baseline" });
-    createBugsForRun(db.sqlite, r1.runId);
+    await createBugsForRun(db.sql, r1.runId);
     const r2 = await runWith(s, [{ spec: linkSpec, status: "FAIL" }, { spec: seoSpec, status: "FAIL" }, { spec: consoleSpec, status: "PASS" }], { name: "Release" });
-    createBugsForRun(db.sqlite, r2.runId);
+    await createBugsForRun(db.sql, r2.runId);
 
     expect(await db.history.previousRunId(r2.runId)).toBe(r1.runId);
     const cmp = (await db.history.compare(r2.runId, r1.runId))!;
@@ -300,12 +300,12 @@ describe("reports", () => {
       { spec: seoSpec, status: "PASS" },
       { spec: consoleSpec, status: "NOT EXECUTED", actual: "Console capture unavailable" },
     ], { name: "Nightly" }));
-    createBugsForRun(db.sqlite, runId);
+    await createBugsForRun(db.sql, runId);
   });
   afterEach(async () => db.close());
 
   it("assembles report data from recorded results only, redacted", async () => {
-    const data = await loadReportData(db.sqlite, runId);
+    const data = await loadReportData(db.sql, runId);
     expect(data.counts).toMatchObject({ PASS: 1, FAIL: 1, "NOT EXECUTED": 1, WARNING: 0 });
     expect(data.pages).toHaveLength(1);
     expect(data.pages[0]).toMatchObject({ bugs: 1 });
@@ -326,7 +326,7 @@ describe("reports", () => {
   });
 
   it("builds the testing workbook with every required sheet, frozen headers and filters", async () => {
-    const data = await loadReportData(db.sqlite, runId);
+    const data = await loadReportData(db.sql, runId);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(Buffer.from(await buildTestingExcel(data)) as unknown as ArrayBuffer);
     const names = wb.worksheets.map((w) => w.name);
@@ -345,7 +345,7 @@ describe("reports", () => {
   });
 
   it("builds the bug workbook", async () => {
-    const data = await loadReportData(db.sqlite, runId);
+    const data = await loadReportData(db.sql, runId);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(Buffer.from(await buildBugExcel(data)) as unknown as ArrayBuffer);
     expect(wb.worksheets.map((w) => w.name)).toEqual(["Bug Report", "Bug Summary", "Testing Type Bug Count"]);
@@ -359,7 +359,7 @@ describe("reports", () => {
   });
 
   it("renders a standalone HTML report with branding, filters and embedded screenshots", async () => {
-    const data = await loadReportData(db.sqlite, runId);
+    const data = await loadReportData(db.sql, runId);
     const key = data.screenshots[0].key;
     const html = renderReportHtml(data, { mode: "standalone", images: new Map([[key, "data:image/png;base64,AAAA"]]) });
     expect(html).toContain("QA Pilot AI");
@@ -377,14 +377,14 @@ describe("reports", () => {
 
   it("generates a bundle of four files, isolating a PDF failure", async () => {
     const storage = new LocalStorageProvider(makeTempDir());
-    const data = await loadReportData(db.sqlite, runId);
+    const data = await loadReportData(db.sql, runId);
     await storage.put(data.screenshots[0].key, new Uint8Array(PNG));
     const bundle = await db.reports.requestBundle(runId);
     const job = db.sqlite.prepare("SELECT type, payload FROM jobs WHERE type = 'report.generate'").get() as { type: string; payload: string };
     expect(JSON.parse(job.payload)).toEqual({ reportBundleId: bundle.id });
 
     const okPdf: PdfRenderer = { render: async (html) => new TextEncoder().encode(`%PDF-1.4 ${html.length}`) };
-    const out = await generateReportBundle(db.sqlite, storage, bundle.id, okPdf);
+    const out = await generateReportBundle(db.sql, storage, bundle.id, okPdf);
     expect(out.status).toBe("READY");
     const ready = (await db.reports.getBundle(bundle.id))!;
     expect(ready.status).toBe("READY");
@@ -394,7 +394,7 @@ describe("reports", () => {
     expect(bytes).toContain(`data:image/png;base64,${Buffer.from(PNG).toString("base64")}`);
 
     const failing = await db.reports.requestBundle(runId);
-    const out2 = await generateReportBundle(db.sqlite, storage, failing.id, { render: async () => { throw new Error("Chromium is not installed"); } });
+    const out2 = await generateReportBundle(db.sql, storage, failing.id, { render: async () => { throw new Error("Chromium is not installed"); } });
     expect(out2.status).toBe("READY");
     const partial = (await db.reports.getBundle(failing.id))!;
     expect(partial.files.find((f) => f.kind === "PDF")).toMatchObject({ status: "FAILED", errorMessage: "Chromium is not installed" });
@@ -411,7 +411,7 @@ describe("reports", () => {
 
     const bundle = await db.reports.requestBundle(runId);
     db.sqlite.prepare("UPDATE jobs SET status = 'RUNNING', locked_by = 'dead-worker' WHERE type = 'report.generate'").run();
-    expect(s.store.recoverAbandonedWork(1000)).toBeGreaterThan(0);
+    expect(await s.store.recoverAbandonedWork(1000)).toBeGreaterThan(0);
     expect((await db.reports.getBundle(bundle.id))!.status).toBe("FAILED");
     expect((await db.testRuns.getById(runId))!.status).toBe("COMPLETED");
   });

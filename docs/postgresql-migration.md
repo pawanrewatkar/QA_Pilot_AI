@@ -1,9 +1,11 @@
 # PostgreSQL schema and migration plan
 
-Status: **prepared and tested in a disposable in-process PostgreSQL (PGlite) only.** Nothing here has been run
-against a hosted database. The app still runs on SQLite (`DATABASE_PROVIDER=local`), and selecting
-`DATABASE_PROVIDER=supabase` still fails closed ("not implemented yet"): about 50 repository methods and the worker
-still use the SQLite connection directly. See "Prerequisites" before any hosted setup.
+Status: **the web app and the worker run on either database.** SQLite stays the default
+(`DATABASE_PROVIDER=local`); `DATABASE_PROVIDER=supabase` opens PostgreSQL through `DATABASE_URL`. Every repository,
+the worker store, the job queue, the bug engine, report loading/generation and External Test Case finalizing use the
+SQL executor (no raw SQLite access remains in app code), and the whole data path gives identical results on SQLite
+and PostgreSQL (`tests/postgres-workflow.test.ts`, `tests/postgres-compat.test.ts`). Tested only in a disposable
+in-process PostgreSQL (PGlite); nothing has been run against a hosted database. See "Prerequisites".
 
 ## What is in the repository
 
@@ -98,8 +100,8 @@ CHECK and unique constraints, and index names are verified table by table in `te
 | CHECK constraints can be bypassed (`ignore_check_constraints`) | Always enforced | SQLite's integrity check reports such rows during pre-flight |
 | Foreign keys can be off | Always enforced | Pre-flight runs `PRAGMA foreign_key_check` |
 | `strftime` defaults | `to_char(now() …)` | Same text format; tested |
-| `COLLATE NOCASE` | Not available | `lower(name)` index; the case-insensitive *sort* in the projects list is still SQLite-only |
-| JSON functions, `SUM(boolean)`, case-insensitive `LIKE`, NULL ordering | Different | Fixed in the migrated repositories (Phase 3.3a); unverified in the methods still on SQLite |
+| `COLLATE NOCASE` | Not available | `lower(name)` index; the projects list sorts by `lower(name)` on PostgreSQL |
+| JSON functions, `json_extract`, `SUM(boolean)`, case-insensitive `LIKE`, NULL ordering, `IS ?`, `INSERT OR IGNORE`, `PRAGMA`, two-argument `MIN` | Different | Fixed everywhere: standard SQL or a PostgreSQL branch; verified by the workflow and compatibility tests |
 | Text sorting is byte-wise | Locale collation | Validation orders by `COLLATE "C"`; app-level sorting is out of scope for now |
 
 ## Migration tracking and ordering
@@ -167,22 +169,35 @@ Done once, at cutover, with the app stopped. The importer is a library on purpos
 ## Prerequisites for a hosted database (not done)
 
 1. Approve the insertion-order column design (or choose the alternative).
-2. Fix the PostgreSQL executor issue found in the review after Phase 3.3a: a transaction's connection can be reused after it
-   is released.
-3. Move the remaining SQLite-only code to the SQL executor: ~50 repository methods, every write transaction, the
-   worker store, job queue (claiming needs `FOR UPDATE SKIP LOCKED`), bug engine, report loading; and replace their
-   SQLite-only SQL (`json_extract`, `IS ?`, `INSERT OR IGNORE`, `PRAGMA`, `COLLATE NOCASE`, `LIKE`).
-4. Implement the PostgreSQL `DatabaseProvider` (today it fails closed) and run the full test suite against it.
-5. Pool settings: connection and statement timeouts, pool size, SSL, and Supabase pooler mode (session vs
-   transaction; the migrator works with both).
+2. ~~Fix the PostgreSQL executor issue found in the review after Phase 3.3a~~ — fixed in Phase 4.3: work that outlives
+   a transaction now uses the pool, never the released client (regression tests in `tests/postgres-executor.test.ts`).
+3. ~~Move the remaining SQLite-only code to the SQL executor~~ — done: every repository method and write
+   transaction, the worker store, job queue (PostgreSQL claiming uses `FOR UPDATE SKIP LOCKED` and re-checks the
+   status), bug engine, report loading/generation and External Test Case finalizing. SQLite-only SQL was replaced by
+   standard SQL (`IS NOT DISTINCT FROM`, `ON CONFLICT DO NOTHING`, `CASE` sums) or a PostgreSQL branch
+   (`lib/database/sql/dialect.ts`: JSON fields, `ILIKE`, case-insensitive sort, column lookup; `LEAST`; `NULLS FIRST`).
+4. ~~Implement the PostgreSQL `DatabaseProvider`~~ — done (`PostgresDatabaseProvider`); the worker selects the same
+   database as the web app (`lib/database/open.ts`).
+5. Pool settings are implemented (Phase 4.3): `DATABASE_POOL_MAX`, `DATABASE_CONNECT_TIMEOUT_MS`,
+   `DATABASE_QUERY_TIMEOUT_MS` (client-side, so it works through a pooler) and `DATABASE_SSL_CA`, all validated. Still to
+   verify against a real server: SSL with Supabase's certificate, and the pooler mode (transaction mode, port 6543, for
+   the app; session mode, port 5432, for migrations; the migrator works with both).
 6. A Supabase project with backups or point-in-time recovery enabled, a role and connection string for the app
    stored as a secret, and a rehearsal of the whole data migration on a copy against a non-production database.
 
 ## Unresolved gaps
 
 - Insertion-order column: designed and tested, not approved.
+- Transactions after an error: SQLite lets a transaction continue after a failed statement that was caught;
+  PostgreSQL rejects every later statement and the transaction fails. Code that recovers from an error inside a
+  transaction must wrap that statement in a nested transaction (savepoint), which works on both.
+- Existing job races (also on SQLite): `complete` can overwrite a cancelled job, `fail` reads then writes outside a
+  transaction and can re-queue a just-cancelled job, and stale-job recovery selects outside its transaction.
 - Native PostgreSQL types (`timestamptz`, `jsonb`, `uuid`, `boolean`), collation and search behaviour: out of scope
   for now; the schema keeps SQLite-compatible types.
-- Untested against a real PostgreSQL server (driver result types, SSL, pooler behaviour, real concurrency).
-- SQLite-only SQL in the ~50 methods still on the raw SQLite connection is not yet verified on PostgreSQL.
-- The case-insensitive project-name sort (`COLLATE NOCASE` in a query, not only the index) has no equivalent yet.
+- Untested against a real PostgreSQL server (driver result types, SSL, pooler behaviour, real concurrency such as two
+  workers claiming at once).
+- The worker reads the form-submission ledger once per run (modules ask synchronously); a submission made by another
+  run of the same project at the same moment is seen by the next run, not the current one.
+- Default timestamps (`created_at` without an explicit value) come from the database clock; on PostgreSQL `now()` is the
+  transaction's start time, so rows written in one transaction share it.
