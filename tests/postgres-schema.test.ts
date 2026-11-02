@@ -39,7 +39,9 @@ describe("migration files", () => {
     const migrations = loadMigrations();
     expect(migrations.map((m) => m.version)).toEqual(migrations.map((_, i) => i + 1));
     expect(migrations[0]).toMatchObject({ version: 1, name: "initial_schema" });
-    expect(checksum(migrations[0].sql.replace(/\n/g, "\r\n"))).toBe(migrations[0].checksum);
+    // The checkout may already use CRLF (Windows); compare both line-ending forms with the recorded checksum.
+    expect(checksum(migrations[0].sql.replace(/\r?\n/g, "\r\n"))).toBe(migrations[0].checksum);
+    expect(checksum(migrations[0].sql.replace(/\r\n/g, "\n"))).toBe(migrations[0].checksum);
     const code = migrations[0].sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n"); // ignore explanatory comments
     expect(code).not.toMatch(/strftime|COLLATE NOCASE|\bREAL\b|AUTOINCREMENT/i);
   });

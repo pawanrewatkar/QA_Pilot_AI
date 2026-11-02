@@ -1,0 +1,76 @@
+# QA Pilot AI pull request checks.
+#
+# Runs the same checks as local development on every pull request into main: install from the lockfile, lint,
+# typecheck, unit and real-browser integration tests, production build, and the UI end-to-end test. Everything runs on
+# the local defaults (SQLite in a temporary folder, local files, the local fixture website): no secrets, no environment,
+# no Supabase, no third-party websites. Nothing is published (no artifacts, no deployments).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+# Least privilege: read the repository only.
+permissions:
+  contents: read
+
+# A new push to the same pull request replaces the run in progress.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Cache Playwright browsers
+        id: browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-ci-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install browsers
+        if: steps.browsers.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Install browser system dependencies
+        if: steps.browsers.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium firefox webkit
+
+      # The browser tests skip themselves when a browser is missing; here a missing browser fails the run instead.
+      - name: Verify browsers
+        run: node -e "const fs = require('fs'); const pw = require('playwright'); for (const name of ['chromium', 'firefox', 'webkit']) { if (!fs.existsSync(pw[name].executablePath())) { console.error(name + ' is not installed'); process.exit(1); } }"
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: End-to-end test
+        run: npm run test:e2e
