@@ -74,6 +74,9 @@ jobs:
           DATABASE_PROVIDER: supabase
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATABASE_POOL_MAX: "3"
+          # Supabase's CA certificate (public, so a variable): the worker verifies the database server against it.
+          # Without it the worker refuses to connect unless DATABASE_URL has sslmode=verify-full.
+          DATABASE_SSL_CA: ${{ vars.DATABASE_SSL_CA }}
           STORAGE_PROVIDER: supabase
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}

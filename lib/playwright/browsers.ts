@@ -1,5 +1,6 @@
 import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType } from "playwright";
 import type { BrowserName, Viewport } from "@/types";
+import { browserEnvironment } from "./browser-env";
 import { classifyBrowserError, describeBrowserError } from "./errors";
 
 const ENGINES: Record<BrowserName, BrowserType> = { chromium, firefox, webkit };
@@ -14,10 +15,13 @@ export class BrowserLaunchError extends Error {
   }
 }
 
-/** Launches a headless browser engine. Startup failures are converted into a descriptive error. */
+/**
+ * Launches a headless browser engine. Startup failures are converted into a descriptive error. The browser gets only
+ * the environment it needs (lib/playwright/browser-env.ts), never the worker's secrets.
+ */
 export async function launchBrowser(name: BrowserName, options: { timeoutMs?: number } = {}): Promise<Browser> {
   try {
-    return await ENGINES[name].launch({ headless: true, timeout: options.timeoutMs ?? 60_000 });
+    return await ENGINES[name].launch({ headless: true, timeout: options.timeoutMs ?? 60_000, env: browserEnvironment() });
   } catch (error) {
     throw new BrowserLaunchError(name, describeBrowserError(classifyBrowserError(error)));
   }

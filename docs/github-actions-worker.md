@@ -37,7 +37,8 @@ While no worker is running, the app's worker banner shows the worker as offline;
 | Setting | Value |
 |---|---|
 | Settings → Environments → **`qa-worker`** | Create it. Deployment branches: `main` only. Optional: required reviewers, so each run is approved |
-| Environment secret **`DATABASE_URL`** | Supabase **session-mode pooler** connection string (port 5432, user `postgres.<project-ref>`), password percent-encoded |
+| Environment secret **`DATABASE_URL`** | Supabase **session-mode pooler** connection string (Dashboard → Connect → Session pooler: host `aws-0-<region>.pooler.supabase.com`, port 5432, user `postgres.<project-ref>`), password percent-encoded, **no** `sslmode`. Not the direct `db.<ref>.supabase.co` string: it is IPv6-only and GitHub-hosted runners have no IPv6 |
+| Environment variable **`DATABASE_SSL_CA`** | Supabase's CA certificate, PEM text (Dashboard → Database settings → SSL Configuration). Public, so a variable. The worker verifies the database server against it and refuses to connect without verified TLS |
 | Environment secret **`SUPABASE_SECRET_KEY`** | Supabase secret key (`sb_secret_…`), used server-side for Storage only |
 | Environment variable **`SUPABASE_URL`** | `https://<project-ref>.supabase.co` (not secret) |
 | Environment variable `STORAGE_BUCKET` | Optional; defaults to `qa-pilot-artifacts` |
@@ -55,6 +56,9 @@ Secrets go only into the `qa-worker` environment, never repository-wide, and nev
 - Secrets reach only the **Run worker** step, as environment variables; no step interpolates secrets, inputs or event
   data into a script (no script injection). `npm ci` and browser installation run without secrets.
 - GitHub masks secret values in logs; the worker never prints connection strings or keys.
+- The database connection always uses TLS with a verified certificate (`DATABASE_SSL_CA`); it is never downgraded.
+- Browsers opened on tested websites (Chromium, Firefox, WebKit, Lighthouse's Chrome) get an allow-listed environment
+  (`lib/playwright/browser-env.ts`): no `DATABASE_URL`, `SUPABASE_SECRET_KEY` or other worker settings.
 - **The repository is public, so workflow logs are public.** On GitHub Actions the worker hides web addresses in its
   log lines (`<url>`), on top of the usual redaction; run names, job ids, counts and error kinds still appear. Full
   details stay in the database, visible only to the owner in the app. Making the repository private removes this

@@ -197,7 +197,7 @@ export interface PostgresPoolOptions {
   connectionTimeoutMillis?: number;
   /** Client-side limit for each query; works through connection poolers (unlike a server statement_timeout). */
   queryTimeoutMillis?: number;
-  /** PEM certificate(s) to verify the server against. When the connection string has its own `sslmode`, that wins. */
+  /** PEM certificate(s) to verify the server against. postgresConfig() refuses connection strings with their own TLS parameters alongside it, because those would win. */
   sslCa?: string;
 }
 

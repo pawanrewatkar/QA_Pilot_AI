@@ -166,6 +166,29 @@ Done once, at cutover, with the app stopped. The importer is a library on purpos
 - The app uses the database owner connection server-side; Supabase's service-role and anon keys are not needed for
   database access, and the anon key must never grant table access (RLS above).
 
+## Read-only connection check (prepared, not run)
+
+`scripts/pg-connection-check.ts` is the first step against a hosted database. It changes nothing: it refuses unsafe
+settings before connecting, connects once through the **session pooler** with **verified TLS** (Supabase's CA, host
+name checked by Node's TLS), sends only `SELECT`s inside a `READ ONLY` transaction that is rolled back, and closes the
+connection. It prints the TLS protocol, server version, database name and whether the schema is present; never the
+password, connection string, host or certificate.
+
+Local file `.env.supabase.local` (git-ignored by `.env*`; values from the Supabase Dashboard, never committed):
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | Connect → **Session pooler**: `postgresql://postgres.<project-ref>:<password>@aws-<n>-<region>.pooler.supabase.com:5432/postgres`, password percent-encoded, no `sslmode` |
+| `DATABASE_SSL_CA` | Database settings → SSL Configuration → download certificate; the PEM text in double quotes (multi-line), or on one line with `\n` |
+
+```bash
+npx tsx --env-file=.env.supabase.local scripts/pg-connection-check.ts
+```
+
+Exit code 0 means every check passed. It refuses (exit 1, before any connection) without a CA, with an invalid CA,
+with `sslmode`/`ssl*` parameters in the URL, with the direct connection (`db.<ref>.supabase.co`, IPv6 only) or the
+transaction pooler (6543). TLS failures (wrong CA, host-name mismatch, no TLS offered) stop it before anything is sent.
+
 ## Prerequisites for a hosted database (not done)
 
 1. Approve the insertion-order column design (or choose the alternative).
