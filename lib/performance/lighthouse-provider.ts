@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { browserEnvironment } from "@/lib/playwright/browser-env";
 import type { PerformanceFormFactor } from "@/types";
 import { PerformanceProviderUnavailableError, type PerformanceMeasurement, type PerformanceProvider, type PerformanceRequest } from "./provider";
 
@@ -44,6 +45,11 @@ export function measurementFromLhr(lhr: LighthouseResultLike, url: string, formF
   };
 }
 
+/** How Lighthouse's Chrome is started: headless, and with only the environment a browser needs (never the worker's secrets). */
+export function lighthouseChromeOptions(chromePath: string) {
+  return { chromePath, chromeFlags: ["--headless=new", "--no-sandbox", "--disable-gpu"], envVars: browserEnvironment() };
+}
+
 /**
  * Runs Lighthouse locally against Playwright's bundled Chromium (no Google API, no key).
  * Each measurement uses a fresh, isolated Chrome instance with throttling per the form factor.
@@ -61,7 +67,7 @@ export class LocalLighthouseProvider implements PerformanceProvider {
     }
     const chromeLauncher = await import("chrome-launcher");
     const { default: lighthouse } = await import("lighthouse");
-    const chrome = await chromeLauncher.launch({ chromePath, chromeFlags: ["--headless=new", "--no-sandbox", "--disable-gpu"] });
+    const chrome = await chromeLauncher.launch(lighthouseChromeOptions(chromePath));
     try {
       const config =
         request.formFactor === "desktop"

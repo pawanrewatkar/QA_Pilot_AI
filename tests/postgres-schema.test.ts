@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalActivityRepository, LocalDocumentRepository, LocalTestRunRepository, type LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { applyMigrations, checksum, loadMigrations, migrationStatus, MigrationError, type Migration } from "@/lib/database/postgres/migrator";
@@ -277,5 +279,122 @@ describe("SQLite → PostgreSQL import", () => {
       ["projects", 2, 2],
       ["activity_log", 2, 1],
     ]);
+  });
+});
+
+describe("rowid tie-break columns", () => {
+  it("are bigint identity (BY DEFAULT), NOT NULL, unique by index only, and never part of the primary key", async () => {
+    const pg = await pgDb();
+    const cols = (await pg.db.query<{ t: string; type: string; identity: string; notnull: boolean }>(
+      "SELECT c.relname AS t, format_type(a.atttypid, a.atttypmod) AS type, a.attidentity AS identity, a.attnotnull AS notnull FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attname = 'rowid' AND NOT a.attisdropped",
+    )).rows;
+    expect(cols.map((c) => c.t).sort()).toEqual([...ROWID_TABLES].sort());
+    for (const c of cols) expect({ type: c.type, identity: c.identity, notnull: c.notnull }, c.t).toEqual({ type: "bigint", identity: "d", notnull: true });
+    const pks = (await pg.db.query<{ t: string; cols: string }>(
+      "SELECT c.conrelid::regclass::text AS t, string_agg(a.attname, ',') AS cols FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) WHERE c.contype = 'p' AND c.connamespace = 'public'::regnamespace GROUP BY 1",
+    )).rows;
+    for (const t of ROWID_TABLES) expect(pks.find((p) => p.t === t)?.cols, t).toBe(t === "external_test_executions" ? "test_run_id" : "id");
+    const idx = (await pg.db.query<{ t: string; def: string }>("SELECT tablename AS t, indexdef AS def FROM pg_indexes WHERE schemaname = 'public' AND indexname LIKE 'idx\\_%\\_rowid'")).rows;
+    expect(idx.map((i) => i.t).sort()).toEqual([...ROWID_TABLES].sort());
+    for (const i of idx) expect(i.def, i.t).toMatch(/^CREATE UNIQUE INDEX idx_\w+_rowid ON public\.\w+ USING btree \(rowid\)$/);
+  });
+
+  it("reject a duplicate rowid, while default inserts and imported rows never collide", async () => {
+    const lite = liteDb();
+    const project = await lite.projects.create(projectInput({ name: "Alpha" }), "o");
+    for (let i = 0; i < 5; i++) await lite.documents.create({ projectId: project.id, kind: "REFERENCE", fileName: `d${i}.pdf`, mimeType: "application/pdf", sizeBytes: 1, storageKey: `projects/${project.id}/d${i}`, checksumSha256: "x" });
+    lite.sqlite.prepare("DELETE FROM documents WHERE file_name IN ('d1.pdf','d3.pdf')").run(); // gaps in the SQLite rowids
+    const pg = await pgDb();
+    await importSqliteIntoPostgres(lite.sqlite, pg.conn, { batchSize: 2 });
+    const docs = new LocalDocumentRepository(pg.sql);
+    for (let i = 0; i < 4; i++) await docs.create({ projectId: project.id, kind: "REFERENCE", fileName: `n${i}.pdf`, mimeType: "application/pdf", sizeBytes: 1, storageKey: `projects/${project.id}/n${i}`, checksumSha256: "y" });
+    const rowids = (await pg.db.query<{ r: string }>("SELECT rowid AS r FROM documents")).rows.map((r) => Number(r.r));
+    expect(new Set(rowids).size).toBe(rowids.length);
+    await expect(
+      pg.db.query("INSERT INTO documents (id, project_id, kind, file_name, mime_type, size_bytes, storage_key, checksum_sha256, rowid) VALUES ('dup', $1, 'REFERENCE', 'dup.pdf', 'application/pdf', 1, 'projects/dup', 'z', $2)", [project.id, rowids[0]]),
+    ).rejects.toThrow(/idx_documents_rowid/);
+  });
+});
+
+describe("rollback script (lib/database/postgres/rollbacks/0001_initial_schema.down.sql)", () => {
+  const ROLLBACK = fs.readFileSync(path.join(process.cwd(), "lib", "database", "postgres", "rollbacks", "0001_initial_schema.down.sql"), "utf8");
+  /** Objects that exist before the migration (like Supabase's) and must survive both the migration and the rollback. */
+  const OTHERS = [
+    "CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;",
+    "CREATE SCHEMA auth; CREATE TABLE auth.users (id uuid PRIMARY KEY, email text); INSERT INTO auth.users VALUES ('00000000-0000-0000-0000-000000000001', 'a@b.test');",
+    "CREATE SCHEMA storage; CREATE TABLE storage.buckets (id text PRIMARY KEY); INSERT INTO storage.buckets VALUES ('qa-pilot-artifacts');",
+    "GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;",
+    "CREATE TABLE public.keep_me (id int PRIMARY KEY); INSERT INTO public.keep_me VALUES (1);",
+    "CREATE FUNCTION public.keep_fn() RETURNS int LANGUAGE sql AS 'SELECT 1';",
+    "CREATE FUNCTION public.ddl_note() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;",
+    "CREATE EVENT TRIGGER ddl_watch_like ON ddl_command_end EXECUTE FUNCTION public.ddl_note();",
+  ].join("\n");
+  const others = async (pg: PgTestDatabase) => {
+    const q = async (sql: string) => (await pg.db.query<Record<string, unknown>>(sql)).rows.map((r) => Object.values(r).join(":")).sort();
+    return [
+      await q("SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'"),
+      await q("SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname IN ('anon','authenticated','service_role')"),
+      await q("SELECT extname FROM pg_extension"),
+      await q("SELECT evtname FROM pg_event_trigger"),
+      await q("SELECT defaclobjtype, array_to_string(defaclacl, ',') FROM pg_default_acl"),
+      await q("SELECT email FROM auth.users"),
+      await q("SELECT id FROM storage.buckets"),
+      await q("SELECT id FROM public.keep_me"),
+      await q("SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'"),
+    ];
+  };
+  const publicObjects = async (pg: PgTestDatabase) =>
+    (await pg.db.query<{ o: string }>("SELECT c.relkind::text || ':' || c.relname AS o FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' ORDER BY 1")).rows.map((r) => r.o);
+  /** Like the hosted database before the first migration: other objects exist, nothing of ours in public. */
+  async function emptyTarget() {
+    const pg = await pgDb([]);
+    await pg.db.exec("DROP TABLE qa_pilot_migrations"); // created by the helper's empty migration run
+    await pg.db.exec(OTHERS);
+    return pg;
+  }
+
+  it("removes exactly what the migration created, keeps everything else, and can be re-run", async () => {
+    const pg = await emptyTarget();
+    const before = { others: await others(pg), objects: await publicObjects(pg) };
+    expect(await applyMigrations(pg.conn, loadMigrations())).toEqual([1]);
+    expect(await others(pg)).toEqual(before.others); // the migration touches nothing else either
+    await pg.db.query("INSERT INTO projects (id, name, website_url, owner_id) VALUES ('p1', 'A', 'https://a.test/', 'o')");
+    await pg.db.exec("SET ROLE anon");
+    expect((await pg.db.query<{ n: number }>("SELECT count(*)::int AS n FROM projects")).rows[0].n).toBe(0); // RLS without policies
+    await pg.db.exec("RESET ROLE");
+    await pg.db.query("DELETE FROM projects");
+    await pg.db.exec(ROLLBACK);
+    expect(await publicObjects(pg)).toEqual(before.objects);
+    expect(await others(pg)).toEqual(before.others);
+    await pg.db.exec(ROLLBACK);
+    expect(await publicObjects(pg)).toEqual(before.objects);
+    expect(await applyMigrations(pg.conn, loadMigrations())).toEqual([1]); // can be applied again
+  });
+
+  it("drops nothing when a table holds data or another object depends on the tables", async () => {
+    const pg = await emptyTarget();
+    await applyMigrations(pg.conn, loadMigrations());
+    const migrated = await publicObjects(pg);
+    await pg.db.query("INSERT INTO projects (id, name, website_url, owner_id) VALUES ('p1', 'A', 'https://a.test/', 'o')");
+    await expect(pg.db.exec(ROLLBACK)).rejects.toThrow(/public\.projects contains 1 row\(s\); rollback stopped/);
+    await pg.db.exec("ROLLBACK");
+    expect(await publicObjects(pg)).toEqual(migrated);
+    await pg.db.query("DELETE FROM projects");
+    await pg.db.exec("CREATE VIEW public.someone_elses_view AS SELECT id FROM projects");
+    const withView = await publicObjects(pg);
+    await expect(pg.db.exec(ROLLBACK)).rejects.toThrow(/depend/);
+    await pg.db.exec("ROLLBACK");
+    expect(await publicObjects(pg)).toEqual(withView);
+  });
+
+  it("cleans up after a failed migration, which leaves only the empty tracking table", async () => {
+    const pg = await emptyTarget();
+    const before = await publicObjects(pg);
+    const [real] = loadMigrations();
+    await expect(applyMigrations(pg.conn, [{ ...real, sql: `${real.sql}\nSELECT * FROM table_that_does_not_exist;` }])).rejects.toThrow(/failed and was rolled back/);
+    expect((await publicObjects(pg)).filter((o) => !before.includes(o)).sort()).toEqual(["i:qa_pilot_migrations_pkey", "r:qa_pilot_migrations"]);
+    await pg.db.exec(ROLLBACK);
+    expect(await publicObjects(pg)).toEqual(before);
   });
 });

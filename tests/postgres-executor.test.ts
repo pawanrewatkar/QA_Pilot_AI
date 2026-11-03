@@ -350,10 +350,11 @@ describe("executor selection", () => {
 
 describe("PostgreSQL configuration", () => {
   const URL = "postgresql://postgres.ref:p%40ss%5Dword@aws-0-region.pooler.supabase.com:5432/postgres";
+  const VERIFY_FULL = `${URL}?sslmode=verify-full`;
   const CA = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
 
   it("uses safe defaults and validated overrides from the environment", () => {
-    expect(postgresConfig(readEnv({ DATABASE_URL: URL }))).toEqual({ url: URL, options: { max: 5, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: undefined } });
+    expect(postgresConfig(readEnv({ DATABASE_URL: VERIFY_FULL }))).toEqual({ url: VERIFY_FULL, options: { max: 5, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: undefined } });
     const env = readEnv({ DATABASE_URL: URL, DATABASE_POOL_MAX: "2", DATABASE_CONNECT_TIMEOUT_MS: "5000", DATABASE_QUERY_TIMEOUT_MS: "60000", DATABASE_SSL_CA: CA });
     expect(postgresConfig(env).options).toEqual({ max: 2, connectionTimeoutMillis: 5000, queryTimeoutMillis: 60_000, sslCa: CA });
     for (const [key, value] of [["DATABASE_POOL_MAX", "0"], ["DATABASE_POOL_MAX", "x"], ["DATABASE_CONNECT_TIMEOUT_MS", "10"], ["DATABASE_QUERY_TIMEOUT_MS", "9999999"]]) {
@@ -384,8 +385,64 @@ describe("PostgreSQL configuration", () => {
   it("passes the settings to the pool when the executor is selected", () => {
     const fake = fakePool();
     const createPool = vi.fn(() => fake.pool);
-    selectSqlExecutor(readEnv({ DATABASE_PROVIDER: "supabase", DATABASE_URL: URL, DATABASE_POOL_MAX: "3" }), vi.fn(), createPool);
-    expect(createPool).toHaveBeenCalledWith(URL, { max: 3, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: undefined });
+    selectSqlExecutor(readEnv({ DATABASE_PROVIDER: "supabase", DATABASE_URL: URL, DATABASE_POOL_MAX: "3", DATABASE_SSL_CA: CA }), vi.fn(), createPool);
+    expect(createPool).toHaveBeenCalledWith(URL, { max: 3, connectionTimeoutMillis: 10_000, queryTimeoutMillis: 30_000, sslCa: CA });
+  });
+});
+
+describe("PostgreSQL TLS", () => {
+  const POOLER = "postgresql://postgres.ref:s3cret-pass@aws-0-region.pooler.supabase.com:5432/postgres";
+  const CA = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----";
+  const config = (vars: Record<string, string>) => postgresConfig(readEnv(vars));
+  const failure = (vars: Record<string, string>) => {
+    try {
+      config(vars);
+    } catch (e) {
+      expect(e).toBeInstanceOf(DatabaseConfigurationError);
+      return (e as Error).message;
+    }
+    throw new Error(`accepted: ${JSON.stringify(Object.keys(vars))}`);
+  };
+
+  it("verifies the server certificate against DATABASE_SSL_CA (Supabase session pooler), never disabling the check", () => {
+    const { url, options } = config({ DATABASE_URL: POOLER, DATABASE_SSL_CA: CA });
+    expect(url).toBe(POOLER);
+    const pool = postgresPoolConfig(url, options);
+    expect(pool.ssl).toEqual({ ca: CA, rejectUnauthorized: true });
+    expect(pool.connectionString).toBe(POOLER); // no TLS parameters that pg would let override the CA check
+  });
+
+  it("accepts a CA stored on one line with literal \\n sequences", () => {
+    expect(config({ DATABASE_URL: POOLER, DATABASE_SSL_CA: CA.replace(/\n/g, "\\n") }).options.sslCa).toBe(CA);
+  });
+
+  it("refuses a remote server without verified TLS instead of connecting unencrypted or unverified", () => {
+    for (const query of ["", "?sslmode=disable", "?sslmode=prefer", "?sslmode=require", "?sslmode=verify-ca", "?sslmode=no-verify", "?ssl=true", "?sslmode=verify-full&uselibpqcompat=true"]) {
+      const message = failure({ DATABASE_URL: `${POOLER}${query}` });
+      expect(message, query).toMatch(/DATABASE_SSL_CA.*sslmode=verify-full/);
+      expect(message).not.toContain("s3cret-pass");
+    }
+    expect(config({ DATABASE_URL: `${POOLER}?sslmode=verify-full` }).url).toContain("sslmode=verify-full"); // publicly trusted certificate
+  });
+
+  it("refuses TLS parameters in DATABASE_URL alongside DATABASE_SSL_CA, because pg would let them replace the CA check", () => {
+    for (const query of ["?sslmode=verify-full", "?sslmode=no-verify", "?sslrootcert=/tmp/ca.pem", "?ssl=false", "?uselibpqcompat=true&sslmode=require"]) {
+      const message = failure({ DATABASE_URL: `${POOLER}${query}`, DATABASE_SSL_CA: CA });
+      expect(message, query).toMatch(/Remove .* from DATABASE_URL when DATABASE_SSL_CA is set/);
+      expect(message).not.toContain("s3cret-pass");
+    }
+  });
+
+  it("rejects an invalid CA without printing it", () => {
+    for (const bad of ["not a certificate", "-----BEGIN CERTIFICATE-----", "MIIB-----END CERTIFICATE-----"]) {
+      const message = failure({ DATABASE_URL: POOLER, DATABASE_SSL_CA: bad });
+      expect(message, bad).toMatch(/DATABASE_SSL_CA must contain a PEM certificate/);
+      expect(message).not.toContain("not a certificate");
+    }
+  });
+
+  it("allows a PostgreSQL server on this machine without TLS (nothing leaves the host)", () => {
+    for (const host of ["127.0.0.1", "localhost", "[::1]"]) expect(config({ DATABASE_URL: `postgresql://u:p@${host}:5432/qa` }).options.sslCa).toBeUndefined();
   });
 });
 

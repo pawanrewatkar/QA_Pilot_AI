@@ -771,6 +771,23 @@ CREATE INDEX idx_projects_owner ON projects(owner_id, created_at);
 
 CREATE INDEX idx_activity_owner ON activity_log(owner_id, created_at);
 
+-- rowid (insertion-order tie-break) is unique per table; id stays the primary key.
+CREATE UNIQUE INDEX idx_projects_rowid ON projects(rowid);
+CREATE UNIQUE INDEX idx_documents_rowid ON documents(rowid);
+CREATE UNIQUE INDEX idx_test_configurations_rowid ON test_configurations(rowid);
+CREATE UNIQUE INDEX idx_test_runs_rowid ON test_runs(rowid);
+CREATE UNIQUE INDEX idx_activity_log_rowid ON activity_log(rowid);
+CREATE UNIQUE INDEX idx_jobs_rowid ON jobs(rowid);
+CREATE UNIQUE INDEX idx_crawl_runs_rowid ON crawl_runs(rowid);
+CREATE UNIQUE INDEX idx_test_results_rowid ON test_results(rowid);
+CREATE UNIQUE INDEX idx_bugs_rowid ON bugs(rowid);
+CREATE UNIQUE INDEX idx_bug_evidence_rowid ON bug_evidence(rowid);
+CREATE UNIQUE INDEX idx_bug_occurrences_rowid ON bug_occurrences(rowid);
+CREATE UNIQUE INDEX idx_bug_status_history_rowid ON bug_status_history(rowid);
+CREATE UNIQUE INDEX idx_report_bundles_rowid ON report_bundles(rowid);
+CREATE UNIQUE INDEX idx_reports_rowid ON reports(rowid);
+CREATE UNIQUE INDEX idx_external_test_executions_rowid ON external_test_executions(rowid);
+
 -- Row level security: deny the public Data API roles by default
 
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;

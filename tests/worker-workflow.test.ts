@@ -56,6 +56,7 @@ describe("worker workflow", () => {
 
   it("uses the hosted database and private storage, and never publishes results as GitHub artifacts", () => {
     expect(workerStep.env).toMatchObject({ DATABASE_PROVIDER: "supabase", STORAGE_PROVIDER: "supabase" });
+    expect(workerStep.env).toMatchObject({ DATABASE_SSL_CA: "${{ vars.DATABASE_SSL_CA }}" }); // verified TLS to the database
     expect(workerStep.run).toBe("npm run worker -- --once");
     expect(text).not.toMatch(/upload-artifact/);
     expect(job.environment).toBe("qa-worker");

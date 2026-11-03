@@ -45,7 +45,7 @@ Values are never stored in the repository. Secrets: mark **Sensitive**.
 | `DATABASE_PROVIDER` | `supabase` | server |
 | `DATABASE_URL` | Supabase **transaction pooler** string: `postgresql://postgres.<project-ref>:<password>@<pooler-host>:6543/postgres`, password percent-encoded | **server only, Sensitive** |
 | `DATABASE_POOL_MAX` | `2` (per function instance; the pooler multiplexes) | server |
-| `DATABASE_SSL_CA` | Supabase root CA certificate (PEM, from the dashboard's database settings); omit `sslmode` from `DATABASE_URL` when set | server |
+| `DATABASE_SSL_CA` | Supabase CA certificate (PEM, Dashboard → Database settings → SSL Configuration). **Required:** without it (or `sslmode=verify-full`) the app refuses to connect; put no `sslmode` in `DATABASE_URL` when set | server |
 | `STORAGE_PROVIDER` | `supabase` | server |
 | `SUPABASE_URL` | `https://<project-ref>.supabase.co` (optional; falls back to `NEXT_PUBLIC_SUPABASE_URL`) | server |
 | `SUPABASE_SECRET_KEY` | secret key (`sb_secret_…`), Storage only | **server only, Sensitive** |
