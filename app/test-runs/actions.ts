@@ -13,7 +13,7 @@ export interface TestRunFormState {
 }
 
 export async function createTestRunAction(_prev: TestRunFormState, payload: unknown): Promise<TestRunFormState> {
-  const result = await createTestRun(actionDb(), payload);
+  const result = await createTestRun(await actionDb(), payload);
   if (!result.ok) return { errors: result.errors };
   revalidatePath("/test-runs");
   revalidatePath("/");
@@ -23,7 +23,7 @@ export async function createTestRunAction(_prev: TestRunFormState, payload: unkn
 export async function cancelTestRunAction(formData: FormData): Promise<void> {
   const id = String(formData.get("testRunId") ?? "");
   if (id) {
-    const db = actionDb();
+    const db = await actionDb();
     const run = await db.testRuns.getById(id);
     if (await db.testRuns.requestCancel(id)) {
       await db.activity.record({ projectId: run?.projectId ?? null, entityType: "test_run", entityId: id, action: "cancel-requested", summary: "Cancellation requested for a test run" });

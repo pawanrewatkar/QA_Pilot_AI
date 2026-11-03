@@ -80,6 +80,9 @@ export class LocalPathSourceProvider implements ExternalTestCaseSourceProvider<s
   }
 }
 
+/** Shown when the shared server folder is disabled (instances with user accounts). Reveals no server path. */
+export const LOCAL_PATH_UNAVAILABLE = "Reading workbooks from a folder on the server is not available on this instance. Upload the Excel file or use a Google Drive link instead.";
+
 export const DRIVE_UNAVAILABLE = "Unable to access the Google Drive file. Please verify that the file is accessible or upload the Excel file directly.";
 
 const GOOGLE_HOSTS = /^(docs\.google\.com|drive\.google\.com|drive\.usercontent\.google\.com|[a-z0-9-]+\.googleusercontent\.com)$/;

@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { readEnv, resolveFromRoot } from "@/lib/config/env";
+import { readEnv } from "@/lib/config/env";
+import { sharedWorkbookFolder } from "@/lib/external-tests/shared-folder";
 import { actionDb, actionIdentity } from "@/lib/server/db";
 import type { ColumnMapping, OutputMode, SourceKind } from "@/lib/external-tests/types";
 import { inspectDraftSheet, inspectSource, startExternalExecution, type DraftInspection, type ExternalTestDeps, type Result, type SheetInspection, type SourceInput } from "@/lib/services/external-tests";
@@ -10,10 +11,10 @@ import { getStorage } from "@/lib/storage";
 
 // Every action resolves the trusted identity (owner-scoped data access; redirects when there is none).
 
-function deps(): ExternalTestDeps {
+async function deps(): Promise<ExternalTestDeps> {
   const env = readEnv();
   // Owner-scoped data access; drafts are stored per owner so one identity can never open another's upload.
-  return { db: actionDb(), ownerId: actionIdentity().ownerId, storage: getStorage(), maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024, localDir: resolveFromRoot(env.EXTERNAL_TEST_CASES_DIR) };
+  return { db: await actionDb(), ownerId: (await actionIdentity()).ownerId, storage: getStorage(), maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024, localDir: sharedWorkbookFolder() };
 }
 
 /** Step 1: load the workbook from an upload, a local path or a Google Drive link. */
@@ -31,12 +32,12 @@ export async function loadWorkbookAction(formData: FormData): Promise<Result<Dra
   } else {
     return { ok: false, error: "Choose a test-case source." };
   }
-  return inspectSource(deps(), input);
+  return inspectSource(await deps(), input);
 }
 
 /** Step 2: another worksheet (or a corrected mapping) of the loaded workbook. */
 export async function inspectSheetAction(draftId: string, sheetName: string, mapping?: ColumnMapping): Promise<Result<SheetInspection>> {
-  return inspectDraftSheet(deps(), draftId, sheetName, mapping);
+  return inspectDraftSheet(await deps(), draftId, sheetName, mapping);
 }
 
 export interface StartPayload {
@@ -57,7 +58,7 @@ export interface StartPayload {
 
 /** Final step: validates everything again, queues the execution and opens its page. */
 export async function startExecutionAction(payload: StartPayload): Promise<{ error: string }> {
-  const res = await startExternalExecution(deps(), payload);
+  const res = await startExternalExecution(await deps(), payload);
   if (!res.ok) return { error: res.error };
   revalidatePath("/external-test-cases");
   revalidatePath("/history");

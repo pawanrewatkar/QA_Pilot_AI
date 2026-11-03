@@ -3,7 +3,7 @@ import { getStorage } from "@/lib/storage";
 
 /** Downloads the result workbook of an external test-case execution. */
 export async function GET(_request: Request, ctx: RouteContext<"/api/external-test-cases/[id]/download">) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const { id } = await ctx.params;
   const file = await access.db.externalTests.getOutputFile(id);

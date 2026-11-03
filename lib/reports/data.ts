@@ -4,7 +4,7 @@ import { getTestModule } from "@/lib/constants/testing";
 import { LocalBugRepository } from "@/lib/database/local/bug-repository";
 import { LocalTestResultRepository, runDetail } from "@/lib/database/local/engine-repositories";
 import type { DetailRowRecord } from "@/lib/database/provider";
-import type { SqliteDatabase } from "@/lib/database/local/sqlite-client";
+import type { SqlExecutor } from "@/lib/database/sql/executor";
 import type { BugDetail, ResultStatusCounts, TestResultRecord, TestResultStatus } from "@/types";
 import { redactRecord, redactText } from "./redact";
 
@@ -127,12 +127,12 @@ const redactOrNull = (s: string | null) => (s === null ? null : redactText(s));
 
 export const deviceOf = (viewport: string | null) => (viewport ? (viewport.startsWith("mobile") ? "Mobile" : viewport.startsWith("tablet") ? "Tablet" : viewport.startsWith("desktop") ? "Desktop" : viewport) : null);
 
-export async function loadReportData(db: SqliteDatabase, runId: string): Promise<ReportData> {
-  const detail = runDetail(db, runId);
+export async function loadReportData(sql: SqlExecutor, runId: string): Promise<ReportData> {
+  const detail = await runDetail(sql, runId);
   if (!detail) throw new Error(`Test run ${runId} not found`);
-  const project = db.prepare("SELECT id, name, website_url FROM projects WHERE id = ?").get(detail.projectId) as Row;
+  const project = (await sql.get<Row>("SELECT id, name, website_url FROM projects WHERE id = ?", [detail.projectId])) as Row;
 
-  const repo = new LocalTestResultRepository(db);
+  const repo = new LocalTestResultRepository(sql);
   const raw: TestResultRecord[] = [];
   for (let offset = 0; ; offset += 2000) {
     const batch = await repo.listByRun(runId, { limit: 2000, offset });
@@ -169,7 +169,7 @@ export async function loadReportData(db: SqliteDatabase, runId: string): Promise
   for (const r of results) counts[r.status]++;
 
   // Bugs observed in this run (new or recurring), with the fields of the bug report.
-  const bugRepo = new LocalBugRepository(db);
+  const bugRepo = new LocalBugRepository(sql);
   const bugList = await bugRepo.list({ testRunId: runId, limit: 1000 });
   const bugs: ReportBug[] = [];
   const bugsByPage = new Map<string, number>();
@@ -201,16 +201,15 @@ export async function loadReportData(db: SqliteDatabase, runId: string): Promise
       createdAt: d.createdAt,
       occurrences: d.occurrenceCount,
     });
-    const pageId = (db.prepare("SELECT page_id FROM bugs WHERE id = ?").get(d.id) as Row | undefined)?.page_id;
+    const pageId = (await sql.get<Row>("SELECT page_id FROM bugs WHERE id = ?", [d.id]))?.page_id;
     if (pageId) bugsByPage.set(String(pageId), (bugsByPage.get(String(pageId)) ?? 0) + 1);
   }
 
-  const pageRows = db
-    .prepare(
-      `SELECT p.id, p.url, p.name, p.page_type, trp.status FROM test_run_pages trp JOIN pages p ON p.id = trp.page_id
+  const pageRows = await sql.all<Row>(
+    `SELECT p.id, p.url, p.name, p.page_type, trp.status FROM test_run_pages trp JOIN pages p ON p.id = trp.page_id
        WHERE trp.test_run_id = ? ORDER BY p.url`,
-    )
-    .all(runId) as Row[];
+    [runId],
+  );
   const pageCounts = new Map<string, ResultStatusCounts>();
   for (const r of raw) {
     if (!r.pageId) continue;
@@ -241,23 +240,23 @@ export async function loadReportData(db: SqliteDatabase, runId: string): Promise
     details[view.id] = { label: view.label, columns: view.columns.map(({ key, label, format }) => ({ key, label, format })), rows, total, truncated: total > rows.length };
   }
 
+  // SQLite sorts NULL page URLs first; PostgreSQL needs NULLS FIRST for the same order.
+  const nulls = sql.dialect === "postgres" ? " NULLS FIRST" : "";
   const links = (
-    db
-      .prepare(
-        `SELECT pg.url AS page_url, l.href, l.resolved_url, l.link_text, l.is_external, l.http_status, l.error, tr.status, tr.browser, tr.viewport
+    await sql.all<Row>(
+      `SELECT pg.url AS page_url, l.href, l.resolved_url, l.link_text, l.is_external, l.http_status, l.error, tr.status, tr.browser, tr.viewport
          FROM link_results l LEFT JOIN pages pg ON pg.id = l.page_id LEFT JOIN test_results tr ON tr.id = l.test_result_id
-         WHERE l.test_run_id = ? ORDER BY CASE tr.status WHEN 'FAIL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, pg.url, l.href LIMIT ?`,
-      )
-      .all(runId, DETAIL_ROW_CAP) as Row[]
+         WHERE l.test_run_id = ? ORDER BY CASE tr.status WHEN 'FAIL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, pg.url${nulls}, l.href LIMIT ?`,
+      [runId, DETAIL_ROW_CAP],
+    )
   ).map((r) => redactRecord(r as Record<string, string | number | null>));
 
   // Screenshots: evidence of failures first, then warnings, then the rest; capped for embedding.
-  const shotRows = db
-    .prepare(
-      `SELECT s.storage_key, s.label, s.kind, s.browser, s.viewport, s.captured_at, pg.url AS page_url FROM screenshots s
+  const shotRows = await sql.all<Row>(
+    `SELECT s.storage_key, s.label, s.kind, s.browser, s.viewport, s.captured_at, pg.url AS page_url FROM screenshots s
        LEFT JOIN pages pg ON pg.id = s.page_id WHERE s.test_run_id = ? ORDER BY s.captured_at`,
-    )
-    .all(runId) as Row[];
+    [runId],
+  );
   const contextByKey = new Map<string, { rank: number; context: string }>();
   for (const r of results) {
     const rank = r.status === "FAIL" ? 0 : r.status === "WARNING" ? 1 : 2;

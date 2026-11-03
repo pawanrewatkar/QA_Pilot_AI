@@ -1,0 +1,6 @@
+# Never upload local data, env files or private deployment notes with a Vercel CLI deploy.
+data
+.env*
+!.env.example
+project-memory/Deployment.md
+**/Deployment.md

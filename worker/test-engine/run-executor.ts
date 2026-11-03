@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Locator } from "playwright";
 import { findViewport } from "@/lib/constants/testing";
-import type { SqliteEngineStore, RunForExecution } from "@/lib/database/local/engine-store";
+import type { EngineStore, RunForExecution } from "@/lib/database/local/engine-store";
 import { createContext, launchBrowser } from "@/lib/playwright/browsers";
 import { describeBrowserError } from "@/lib/playwright/errors";
 import { PageSession } from "@/lib/playwright/page-session";
@@ -22,7 +22,7 @@ const MAX_SCREENSHOTS_PER_PAGE_COMBO = 25;
 const MODULE_TIMEOUT_MS = 5 * 60_000;
 
 export interface RunExecutorDeps {
-  store: SqliteEngineStore;
+  store: EngineStore;
   storage: StorageProvider;
   log: (message: string) => void;
   signal?: AbortSignal;
@@ -47,6 +47,30 @@ function pageLoadSpec(url: string) {
   });
 }
 
+/**
+ * Ordered background writes for code paths that are synchronous by design (recording outcomes, progress, external
+ * observations). Writes run one after another in the order they were added; `flush` waits for all of them and logs
+ * (instead of throwing) any that failed, so one bad write never stops the run — as before, when each failed write was
+ * contained by the page that made it.
+ */
+function writeQueue(log: (message: string) => void) {
+  let tail: Promise<void> = Promise.resolve();
+  const errors: string[] = [];
+  return {
+    add(write: () => Promise<unknown>) {
+      tail = tail.then(write).then(
+        () => undefined,
+        (error: unknown) => void errors.push(error instanceof Error ? error.message.split("\n")[0] : String(error)),
+      );
+    },
+    async flush() {
+      await tail;
+      const failed = errors.splice(0);
+      if (failed.length) log(`${failed.length} write(s) for this run failed; first: ${failed[0]}`);
+    },
+  };
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -64,7 +88,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
  */
 export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<RunSummary> {
   const { store, log } = deps;
-  const run = store.getRunForExecution(runId);
+  const run = await store.getRunForExecution(runId);
   if (!run) return { status: "FAILED", results: 0, error: "Test run not found" };
   if (run.status !== "PENDING") return { status: "FAILED", results: 0, error: `Run is ${run.status}, not PENDING` };
 
@@ -73,17 +97,24 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   const plan = planExecution(run.snapshot.modules);
   const total = run.pages.length * browsers.length * viewports.length;
   if (total === 0) {
-    store.finishRun(runId, "FAILED", "Nothing to execute: the run has no pages, browsers or viewports.");
+    await store.finishRun(runId, "FAILED", "Nothing to execute: the run has no pages, browsers or viewports.");
     return { status: "FAILED", results: 0, error: "Nothing to execute" };
   }
 
-  store.markRunRunning(runId, total);
+  await store.markRunRunning(runId, total);
   log(`Run ${runId}: ${run.pages.length} pages × ${browsers.length} browsers × ${viewports.length} viewports, ${plan.modules.length} modules`);
 
+  const writes = writeQueue(log);
   const linkChecker = new LinkChecker({ timeoutMs: Math.min(run.options.navigationTimeoutMs, 20_000) });
+  // The ledger is read once per run (modules ask synchronously); submissions made during the run are added to it
+  // at once and saved in order.
+  const submitted = new Set((await store.listFormSubmissions(run.projectId)).map((s) => `${s.kind}|${s.fingerprint}`));
   const formLedger = {
-    hasSubmitted: (kind: string, fp: string) => store.hasFormSubmission(run.projectId, kind, fp),
-    record: (kind: string, fp: string, pageUrl: string) => store.recordFormSubmission(run.projectId, runId, kind, fp, pageUrl),
+    hasSubmitted: (kind: string, fp: string) => submitted.has(`${kind}|${fp}`),
+    record: (kind: string, fp: string, pageUrl: string) => {
+      submitted.add(`${kind}|${fp}`);
+      writes.add(() => store.recordFormSubmission(run.projectId, runId, kind, fp, pageUrl));
+    },
   };
   const launch = deps.launch ?? ((b: BrowserName) => launchBrowser(b));
   const runPageIds = new Map<string, string>();
@@ -91,13 +122,13 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   const shared = new Map<string, unknown>();
   if (run.runType === "EXTERNAL_TEST_CASE") {
     // External Test Case Testing: the cases and a sink for per-device observations (see lib/external-tests/module.ts).
-    shared.set(EXTERNAL_CASES_KEY, store.getExternalCases(runId));
-    shared.set(EXTERNAL_SINK_KEY, (o: ExternalObservationInput) => store.saveExternalObservation(runId, o));
+    shared.set(EXTERNAL_CASES_KEY, await store.getExternalCases(runId));
+    shared.set(EXTERNAL_SINK_KEY, (o: ExternalObservationInput) => writes.add(() => store.saveExternalObservation(runId, o)));
   }
   const finalizeExternal = async (reason: string | null) => {
     if (run.runType !== "EXTERNAL_TEST_CASE") return;
     try {
-      await finalizeExternalRun(store.database, deps.storage, runId, reason);
+      await finalizeExternalRun(store.sql, deps.storage, runId, reason);
     } catch (error) {
       log(`Finalizing external test cases for run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -106,18 +137,30 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   let completed = 0;
   let resultCount = 0;
   let cancelled = false;
-  const isCancelled = () => {
-    if (!cancelled && (deps.signal?.aborted || store.isRunCancelRequested(runId))) cancelled = true;
+  /** Re-reads the run's cancel flag; `isCancelled` (synchronous, used by modules) reports the latest reading. */
+  const refreshCancelled = async () => {
+    if (!cancelled && (deps.signal?.aborted || (await store.isRunCancelRequested(runId)))) cancelled = true;
     return cancelled;
   };
+  const isCancelled = () => {
+    if (deps.signal?.aborted) cancelled = true;
+    return cancelled;
+  };
+  // Also checked every second, so a long module notices a cancellation without waiting for the next page.
+  const cancelPoll = setInterval(() => void refreshCancelled().catch(() => undefined), 1000);
+  cancelPoll.unref?.();
+  const progress = (fields: Parameters<EngineStore["updateRunProgress"]>[1]) => writes.add(() => store.updateRunProgress(runId, fields));
 
   const record = (page: { id: string; url: string }, browser: BrowserName, viewport: Viewport, o: CheckOutcome) => {
-    let runPageId = runPageIds.get(page.id);
-    if (!runPageId) {
-      runPageId = store.ensureRunPage(runId, page.id);
-      runPageIds.set(page.id, runPageId);
-    }
-    store.recordOutcome({ runId, projectId: run.projectId, pageId: page.id, pageUrl: page.url, runPageId, browser, viewport: o.viewportOverride ?? viewport.id, outcome: finalizeOutcome(o) });
+    const finalized = finalizeOutcome(o);
+    writes.add(async () => {
+      let runPageId = runPageIds.get(page.id);
+      if (!runPageId) {
+        runPageId = await store.ensureRunPage(runId, page.id);
+        runPageIds.set(page.id, runPageId);
+      }
+      await store.recordOutcome({ runId, projectId: run.projectId, pageId: page.id, pageUrl: page.url, runPageId, browser, viewport: o.viewportOverride ?? viewport.id, outcome: finalized });
+    });
     resultCount++;
   };
 
@@ -131,10 +174,10 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
 
   try {
     for (const [bi, browserName] of browsers.entries()) {
-      if (isCancelled()) break;
+      if (await refreshCancelled()) break;
       let browser: Browser | null = null;
       try {
-        store.updateRunProgress(runId, { currentTest: `Launching ${browserName}` });
+        progress({ currentTest: `Launching ${browserName}` });
         browser = await launch(browserName);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -146,12 +189,12 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
             completed++;
           }
         }
-        store.updateRunProgress(runId, { completed });
+        progress({ completed });
         continue;
       }
 
       for (const [vi, viewport] of viewports.entries()) {
-        if (isCancelled()) break;
+        if (await refreshCancelled()) break;
         let context: BrowserContext | null = null;
         try {
           context = await createContext(browser, { viewport });
@@ -161,16 +204,16 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
             record(page, browserName, viewport, outcome.notExecuted(pageLoadSpec(page.url), `Browser context could not be created: ${reason}`));
             completed++;
           }
-          store.updateRunProgress(runId, { completed });
+          progress({ completed });
           continue;
         }
 
         for (const page of run.pages) {
-          if (isCancelled()) break;
+          if (await refreshCancelled()) break;
           const isPrimary = bi === 0 && vi === 0;
-          store.updateRunProgress(runId, { currentPageUrl: page.url, currentTest: `Loading page (${browserName} ${viewport.width}×${viewport.height})` });
+          progress({ currentPageUrl: page.url, currentTest: `Loading page (${browserName} ${viewport.width}×${viewport.height})` });
           try {
-            await testPage({ run, page, browserName, viewport, context, isPrimary, plan, deps, linkChecker, formLedger, record, recordNotExecuted, isCancelled, shared, referenceDocument });
+            await testPage({ run, page, browserName, viewport, context, isPrimary, plan, deps, linkChecker, formLedger, record, recordNotExecuted, isCancelled, refreshCancelled, progress, shared, referenceDocument });
           } catch (error) {
             // An unexpected error on one page must not stop the other pages, browsers or viewports.
             const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
@@ -182,7 +225,7 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
             }
           }
           completed++;
-          store.updateRunProgress(runId, { completed });
+          progress({ completed });
         }
         await context.close().catch(() => undefined);
       }
@@ -191,11 +234,14 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`Run ${runId} failed: ${message}`);
+    clearInterval(cancelPoll);
+    await writes.flush();
     await finalizeExternal(`This test case was not executed because the run stopped: ${message}`);
-    store.finishRun(runId, "FAILED", message);
-    store.recordActivity(run.projectId, "test_run", runId, "failed", `Test run failed: ${message.slice(0, 200)}`);
+    await store.finishRun(runId, "FAILED", message);
+    await store.recordActivity(run.projectId, "test_run", runId, "failed", `Test run failed: ${message.slice(0, 200)}`);
     return { status: "FAILED", results: resultCount, error: message };
   }
+  clearInterval(cancelPoll);
 
   // Cross-page checks (e.g. duplicate titles) once every page has been visited.
   if (!cancelled && browsers.length && viewports.length) {
@@ -211,26 +257,29 @@ export async function executeRun(runId: string, deps: RunExecutorDeps): Promise<
     }
   }
 
+  // Every recorded outcome, observation and progress update is stored before results are read back.
+  await writes.flush();
+
   // Turn verified failures (FAIL with evidence) into bugs, deduplicated against the project's existing bugs.
   try {
-    const bugSummary = createBugsForRun(store.database, runId);
+    const bugSummary = await createBugsForRun(store.sql, runId);
     log(`Run ${runId}: ${bugSummary.created} new bug(s), ${bugSummary.updated} existing bug(s) seen again, ${bugSummary.reopened} reopened`);
   } catch (error) {
     log(`Bug creation for run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   await finalizeExternal(cancelled ? "The execution was cancelled before this test case ran." : null);
-  for (const id of runPageIds.values()) store.finishRunPage(id, cancelled ? "CANCELLED" : "COMPLETED", null);
+  for (const id of runPageIds.values()) await store.finishRunPage(id, cancelled ? "CANCELLED" : "COMPLETED", null);
   const status = cancelled ? "CANCELLED" : "COMPLETED";
-  store.finishRun(runId, status, null);
-  store.recordActivity(run.projectId, "test_run", runId, status === "CANCELLED" ? "cancelled" : "completed", `Test run ${status === "CANCELLED" ? "cancelled" : "completed"}: ${resultCount} results recorded across ${completed} page/browser/viewport units`);
+  await store.finishRun(runId, status, null);
+  await store.recordActivity(run.projectId, "test_run", runId, status === "CANCELLED" ? "cancelled" : "completed", `Test run ${status === "CANCELLED" ? "cancelled" : "completed"}: ${resultCount} results recorded across ${completed} page/browser/viewport units`);
 
   // Reports selected for the run are queued as a separate job, so a report failure never affects the run.
   const formats = run.options.reports?.formats ?? [];
   if (status === "COMPLETED" && formats.length) {
     try {
       const kinds = formats.flatMap((f): ReportKind[] => (f === "EXCEL" ? ["TESTING_EXCEL", "BUG_EXCEL"] : [f]));
-      const bundle = await new LocalReportRepository(store.database).requestBundle(runId, kinds);
+      const bundle = await new LocalReportRepository(store.sql).requestBundle(runId, kinds);
       log(`Run ${runId}: report ${bundle.id} queued (${kinds.join(", ")})`);
     } catch (error) {
       log(`Could not queue the report for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -253,6 +302,8 @@ interface PageJob {
   record: (page: { id: string; url: string }, browser: BrowserName, viewport: Viewport, o: CheckOutcome) => void;
   recordNotExecuted: (page: { id: string; url: string }, browser: BrowserName, viewport: Viewport, reason: string, isPrimary: boolean) => void;
   isCancelled: () => boolean;
+  refreshCancelled: () => Promise<boolean>;
+  progress: (fields: { completed?: number; currentPageUrl?: string | null; currentTest?: string | null }) => void;
   shared: Map<string, unknown>;
   referenceDocument: PageTestContext["referenceDocument"];
 }
@@ -286,7 +337,7 @@ async function testPage(job: PageJob) {
       screenshots++;
       const key = `runs/${run.id}/${page.id}/${browserName}-${viewport.id}/${String(screenshots).padStart(2, "0")}-${kind.toLowerCase()}.png`;
       await deps.storage.put(key, new Uint8Array(buffer), { contentType: "image/png" });
-      deps.store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: browserName, viewport: viewport.id, width: viewport.width, height: viewport.height, kind, label });
+      await deps.store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: key, browser: browserName, viewport: viewport.id, width: viewport.width, height: viewport.height, kind, label });
       return { type: "screenshot", label: `${label} (${kind.toLowerCase().replace("_", "-")})`, storageKey: key };
     } catch (error) {
       // Recorded below as an evidence-capture result; the check itself continues without the image.
@@ -338,7 +389,7 @@ async function testPage(job: PageJob) {
     network: session.network.map((n) => ({ url: n.url, method: n.method, resourceType: n.resourceType, status: n.status, failure: n.failure })),
   };
   // Load-time console/network activity, tagged with browser and viewport (interaction noise from the tests is excluded).
-  deps.store.saveObservations({
+  await deps.store.saveObservations({
     runId: run.id,
     pageId: page.id,
     browser: browserName,
@@ -378,13 +429,13 @@ async function testPage(job: PageJob) {
     },
     isCancelled: job.isCancelled,
     setCurrentTest(label: string) {
-      deps.store.updateRunProgress(run.id, { currentTest: label.slice(0, 200) });
+      job.progress({ currentTest: label.slice(0, 200) });
     },
   };
 
   let failures = 0;
   for (const mod of job.plan.modules) {
-    if (job.isCancelled()) break;
+    if (await job.refreshCancelled()) break;
     if (mod.scope === "page" && !job.isPrimary) continue;
     ctx.setCurrentTest(`${mod.id} (${browserName} ${viewport.width}×${viewport.height})`);
     const outcomes = await runModule(mod, ctx);
@@ -397,7 +448,7 @@ async function testPage(job: PageJob) {
     if (current.page.url() !== nav.finalUrl || current.crashed) await ctx.reload();
   }
   // A full-page screenshot accompanies any failures on this page/browser/viewport as bug evidence.
-  if (failures > 0 && !job.isCancelled()) {
+  if (failures > 0 && !(await job.refreshCancelled())) {
     if (await ctx.reload()) await capture("Full page after testing", undefined, { fullPage: true });
   }
   reportScreenshotFailures();

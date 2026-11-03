@@ -3,7 +3,7 @@ import { getStorage } from "@/lib/storage";
 
 /** Streams a stored reference document back to the user as a download. */
 export async function GET(_request: Request, ctx: RouteContext<"/api/documents/[id]">) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const { id } = await ctx.params;
   const doc = await access.db.documents.getById(id);

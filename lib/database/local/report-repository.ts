@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { ListOptions, ReportBundleRecord, ReportFileRecord, ReportKind, ReportRecord } from "@/types";
 import type { ReportBundleQuery, ReportFileLocation, ReportRepository } from "../provider";
+import { ilike, jsonText } from "../sql/dialect";
+import type { SqlExecutor, SqlValue } from "../sql/executor";
 import { enqueueJob } from "./engine-repositories";
-import type { SqliteDatabase } from "./sqlite-client";
 
 type Row = Record<string, unknown>;
 const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
@@ -12,14 +13,16 @@ const likePattern = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 const KIND_ORDER = ["PDF", "HTML", "TESTING_EXCEL", "BUG_EXCEL"];
 
 export class LocalReportRepository implements ReportRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async list(options: ListOptions = {}): Promise<ReportRecord[]> {
     const conditions = [...(options.projectId ? ["rp.project_id = ?"] : []), ...(options.ownerId !== undefined ? ["p.owner_id = ?"] : [])];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const rows = this.db
-      .prepare(`SELECT rp.*, p.name AS project_name FROM reports rp JOIN projects p ON p.id = rp.project_id ${where} ORDER BY rp.created_at DESC, rp.rowid DESC LIMIT ?`)
-      .all(...(options.projectId ? [options.projectId] : []), ...(options.ownerId !== undefined ? [options.ownerId] : []), clampLimit(options.limit, 1000)) as Row[];
+    const rows = await this.sql.all<Row>(`SELECT rp.*, p.name AS project_name FROM reports rp JOIN projects p ON p.id = rp.project_id ${where} ORDER BY rp.created_at DESC, rp.rowid DESC LIMIT ?`, [
+      ...(options.projectId ? [options.projectId] : []),
+      ...(options.ownerId !== undefined ? [options.ownerId] : []),
+      clampLimit(options.limit, 1000),
+    ]);
     return rows.map((row) => ({
       id: String(row.id),
       projectId: String(row.project_id),
@@ -36,7 +39,7 @@ export class LocalReportRepository implements ReportRepository {
 
   private where(q: ReportBundleQuery) {
     const where: string[] = [];
-    const params: unknown[] = [];
+    const params: SqlValue[] = [];
     if (q.projectId) {
       where.push("b.project_id = ?");
       params.push(q.projectId);
@@ -56,16 +59,17 @@ export class LocalReportRepository implements ReportRepository {
     const search = q.search?.trim();
     if (search) {
       const p = likePattern(search);
-      where.push(`(b.name LIKE ? ESCAPE '\\' OR b.website LIKE ? ESCAPE '\\' OR p.name LIKE ? ESCAPE '\\')`);
+      const like = ilike(this.sql);
+      where.push(`(b.name ${like} ? ESCAPE '\\' OR b.website ${like} ? ESCAPE '\\' OR p.name ${like} ? ESCAPE '\\')`);
       params.push(p, p, p);
     }
     return { sql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
   }
 
-  private mapBundles(rows: Row[]): ReportBundleRecord[] {
+  private async mapBundles(rows: Row[]): Promise<ReportBundleRecord[]> {
     if (!rows.length) return [];
     const ids = rows.map((r) => String(r.id));
-    const files = this.db.prepare(`SELECT * FROM reports WHERE bundle_id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[];
+    const files = await this.sql.all<Row>(`SELECT * FROM reports WHERE bundle_id IN (${ids.map(() => "?").join(",")})`, ids);
     const byBundle = new Map<string, ReportFileRecord[]>();
     for (const f of files) {
       const list = byBundle.get(String(f.bundle_id)) ?? [];
@@ -101,47 +105,52 @@ export class LocalReportRepository implements ReportRepository {
 
   async listBundles(q: ReportBundleQuery = {}): Promise<ReportBundleRecord[]> {
     const { sql, params } = this.where(q);
-    const rows = this.db.prepare(`${this.bundleSelect} ${sql} ORDER BY b.created_at DESC, b.rowid DESC LIMIT ? OFFSET ?`).all(...params, clampLimit(q.limit), Math.max(0, q.offset ?? 0)) as Row[];
+    const rows = await this.sql.all<Row>(`${this.bundleSelect} ${sql} ORDER BY b.created_at DESC, b.rowid DESC LIMIT ? OFFSET ?`, [...params, clampLimit(q.limit), Math.max(0, q.offset ?? 0)]);
     return this.mapBundles(rows);
   }
 
   async countBundles(q: ReportBundleQuery = {}): Promise<number> {
     const { sql, params } = this.where(q);
-    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM report_bundles b JOIN projects p ON p.id = b.project_id ${sql}`).get(...params) as Row).c);
+    return Number(((await this.sql.get<Row>(`SELECT COUNT(*) AS c FROM report_bundles b JOIN projects p ON p.id = b.project_id ${sql}`, params)) as Row).c);
   }
 
   async getBundle(id: string): Promise<ReportBundleRecord | null> {
-    const row = this.db.prepare(`${this.bundleSelect} WHERE b.id = ?`).get(id) as Row | undefined;
-    return row ? this.mapBundles([row])[0] : null;
+    const row = await this.sql.get<Row>(`${this.bundleSelect} WHERE b.id = ?`, [id]);
+    return row ? (await this.mapBundles([row]))[0] : null;
   }
 
   async requestBundle(testRunId: string, kinds?: ReportKind[]): Promise<ReportBundleRecord> {
-    const run = this.db.prepare("SELECT r.id, r.name, r.status, r.project_id, p.name AS project_name, p.website_url FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?").get(testRunId) as Row | undefined;
+    const run = await this.sql.get<Row>("SELECT r.id, r.name, r.status, r.project_id, p.name AS project_name, p.website_url FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?", [testRunId]);
     if (!run) throw new Error("Test run not found");
     if (run.status === "PENDING" || run.status === "RUNNING") throw new Error("Reports can be generated once the run has finished.");
     const id = randomUUID();
     const ts = new Date().toISOString();
     const name = `${String(run.project_name)} — ${run.name ? String(run.name) : `Run ${String(run.id).slice(0, 8)}`}`;
-    this.db.transaction(() => {
-      this.db.prepare("INSERT INTO report_bundles (id, project_id, test_run_id, name, website, status, created_at) VALUES (?, ?, ?, ?, ?, 'GENERATING', ?)").run(id, run.project_id, testRunId, name, run.website_url, ts);
+    await this.sql.transaction(async (tx) => {
+      await tx.run("INSERT INTO report_bundles (id, project_id, test_run_id, name, website, status, created_at) VALUES (?, ?, ?, ?, ?, 'GENERATING', ?)", [
+        id,
+        run.project_id as SqlValue,
+        testRunId,
+        name,
+        run.website_url as SqlValue,
+        ts,
+      ]);
       // The payload names only the bundle so that recovery of a stopped worker never touches the run.
-      enqueueJob(this.db, "report.generate", kinds ? { reportBundleId: id, kinds } : { reportBundleId: id });
-    })();
+      await enqueueJob(tx, "report.generate", kinds ? { reportBundleId: id, kinds } : { reportBundleId: id });
+    });
     return (await this.getBundle(id))!;
   }
 
   async deleteBundle(id: string): Promise<boolean> {
-    let deleted = false;
-    this.db.transaction(() => {
-      this.db.prepare("UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND type = 'report.generate' AND json_extract(payload, '$.reportBundleId') = ?").run(new Date().toISOString(), id);
-      this.db.prepare("DELETE FROM reports WHERE bundle_id = ?").run(id);
-      deleted = this.db.prepare("DELETE FROM report_bundles WHERE id = ?").run(id).changes > 0;
-    })();
-    return deleted;
+    return this.sql.transaction(async (tx) => {
+      await tx.run(`UPDATE jobs SET status = 'CANCELLED', updated_at = ? WHERE status = 'PENDING' AND type = 'report.generate' AND ${jsonText(tx, "payload", "reportBundleId")} = ?`, [new Date().toISOString(), id]);
+      await tx.run("DELETE FROM reports WHERE bundle_id = ?", [id]);
+      return (await tx.run("DELETE FROM report_bundles WHERE id = ?", [id])).changes > 0;
+    });
   }
 
   async getFile(bundleId: string, kind: string): Promise<ReportFileLocation | null> {
-    const row = this.db.prepare("SELECT * FROM reports WHERE bundle_id = ? AND kind = ? AND status = 'READY'").get(bundleId, kind) as Row | undefined;
+    const row = await this.sql.get<Row>("SELECT * FROM reports WHERE bundle_id = ? AND kind = ? AND status = 'READY'", [bundleId, kind]);
     if (!row || !row.storage_key) return null;
     return { storageKey: String(row.storage_key), fileName: String(row.file_name ?? "report"), kind: String(row.kind) as ReportFileLocation["kind"] };
   }

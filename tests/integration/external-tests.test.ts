@@ -2,7 +2,7 @@ import fs from "node:fs";
 import ExcelJS from "exceljs";
 import { LOCAL_OWNER_ID } from "@/lib/auth/identity-constants";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import type { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import type { ExternalStatus } from "@/lib/external-tests/types";
 import { inspectSource, startExternalExecution, type ExternalTestDeps } from "@/lib/services/external-tests";
@@ -75,7 +75,7 @@ describe.skipIf(!browserInstalled("chromium"))("External Test Case Testing again
     });
     if (!started.ok) throw new Error(started.error);
     db.sqlite.prepare("UPDATE jobs SET status = 'COMPLETED' WHERE json_extract(payload, '$.testRunId') = ?").run(started.value.runId);
-    const summary = await executeRun(started.value.runId, { store: new SqliteEngineStore(db.sqlite), storage: deps.storage, log: () => undefined });
+    const summary = await executeRun(started.value.runId, { store: new EngineStore(db.sql), storage: deps.storage, log: () => undefined });
     expect(summary.status).toBe("COMPLETED");
     return started.value.runId;
   }

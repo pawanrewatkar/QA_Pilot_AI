@@ -3,11 +3,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { isEmailAllowed, normalizeEmail, parseAllowList } from "@/lib/auth/allow-list";
 import { LOCAL_OWNER_ID } from "@/lib/auth/identity-constants";
-import { resolveIdentity } from "@/lib/auth/identity";
+import { resolveIdentityConfig as resolveIdentity } from "@/lib/auth/identity";
 import { createBugsForRun } from "@/lib/bugs/engine";
 import { DEFAULT_CRAWL_CONFIG } from "@/lib/constants/crawl";
 import { DEFAULT_REPORT_SECTIONS } from "@/lib/constants/testing";
-import { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import { EngineStore } from "@/lib/database/local/engine-store";
 import { LocalDatabaseProvider } from "@/lib/database/local/local-database-provider";
 import { openSqlite, runMigrations } from "@/lib/database/local/sqlite-client";
 import { OwnerScopedDatabaseProvider, ResourceNotFoundError } from "@/lib/database/owner-scoped-provider";
@@ -31,21 +31,21 @@ async function seedOwner(base: LocalDatabaseProvider, storage: LocalStorageProvi
   const document = await base.documents.create({ projectId: project.id, kind: "REFERENCE", fileName: "ref.pdf", mimeType: "application/pdf", sizeBytes: 1, storageKey: `projects/${project.id}/documents/ref.pdf`, checksumSha256: "x" });
   const crawl = await base.crawlRuns.createAndEnqueue(project.id, project.websiteUrl, DEFAULT_CRAWL_CONFIG);
   const { page } = await base.pages.addManual(project.id, project.websiteUrl, project.websiteUrl);
-  const store = new SqliteEngineStore(base.sqlite);
+  const store = new EngineStore(base.sql);
   const run = await base.testRuns.createAndEnqueue({ projectId: project.id, configurationId: null, name: `${name} run`, modules: ["links"], browsers: ["chromium"], viewports: [VIEWPORT], pageIds: [page.id], configurationName: null, options: { allowFormSubmission: false, maxLinksPerPage: 10, navigationTimeoutMs: 1000 } });
   base.sqlite.prepare("UPDATE jobs SET status = 'COMPLETED' WHERE json_extract(payload, '$.testRunId') = ?").run(run.id);
-  store.markRunRunning(run.id, 1);
-  const rp = store.ensureRunPage(run.id, page.id);
+  await store.markRunRunning(run.id, 1);
+  const rp = await store.ensureRunPage(run.id, page.id);
   const screenshotKey = `runs/${run.id}/${page.id}/chromium-${VIEWPORT}/01-viewport.png`;
   await storage.put(screenshotKey, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
-  store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: screenshotKey, browser: "chromium", viewport: VIEWPORT, width: 1, height: 1 });
-  store.recordOutcome({ runId: run.id, projectId: project.id, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport: VIEWPORT, outcome: finalizeOutcome(outcome.fail(failSpec, "404", [{ type: "screenshot", label: "s", storageKey: screenshotKey }])) });
-  store.finishRunPage(rp, "COMPLETED", null);
-  store.finishRun(run.id, "COMPLETED", null);
-  createBugsForRun(base.sqlite, run.id);
+  await store.saveScreenshot({ runId: run.id, pageId: page.id, storageKey: screenshotKey, browser: "chromium", viewport: VIEWPORT, width: 1, height: 1 });
+  await store.recordOutcome({ runId: run.id, projectId: project.id, pageId: page.id, pageUrl: page.url, runPageId: rp, browser: "chromium", viewport: VIEWPORT, outcome: finalizeOutcome(outcome.fail(failSpec, "404", [{ type: "screenshot", label: "s", storageKey: screenshotKey }])) });
+  await store.finishRunPage(rp, "COMPLETED", null);
+  await store.finishRun(run.id, "COMPLETED", null);
+  await createBugsForRun(base.sql, run.id);
   const [bug] = await base.bugs.list({ testRunId: run.id });
   const bundle = await base.reports.requestBundle(run.id);
-  await generateReportBundle(base.sqlite, storage, bundle.id, { render: async () => new TextEncoder().encode("%PDF-1.4") });
+  await generateReportBundle(base.sql, storage, bundle.id, { render: async () => new TextEncoder().encode("%PDF-1.4") });
   const externalRunId = await base.externalTests.create({
     projectId: project.id, name: `${name} external`, websiteUrl: project.websiteUrl, pageId: page.id, source: { kind: "UPLOAD", name: "cases.xlsx", storageKey: `projects/${project.id}/external-test-cases/a.xlsx` },
     worksheet: "Cases", headerRow: 1, mapping: { title: 1, expected: 2 }, outputMode: "NEW_SHEET", browsers: ["chromium"], viewports: [VIEWPORT], allowFormSubmission: false, navigationTimeoutMs: 1000,
@@ -72,6 +72,41 @@ describe("owner-scoped data access", () => {
     bob = new OwnerScopedDatabaseProvider(base, "user-bob");
   });
   afterEach(async () => base.close());
+
+  it("resolves owners through the async executor exactly as direct SQLite queries do", async () => {
+    // Reference: the pre-executor implementation (direct better-sqlite3 lookups along the parent chain).
+    const direct = (sql: string, id: string) => (base.sqlite.prepare(sql).get(id) as { owner_id: string | null } | undefined)?.owner_id ?? null;
+    const viaRun = "SELECT p.owner_id FROM test_runs r JOIN projects p ON p.id = r.project_id WHERE r.id = ?";
+    const viaBundle = "SELECT p.owner_id FROM report_bundles b JOIN projects p ON p.id = b.project_id WHERE b.id = ?";
+    const viaProject = "SELECT owner_id FROM projects WHERE id = ?";
+    const cases = (s: typeof a) =>
+      [
+        ["project", s.project.id, viaProject],
+        ["configuration", s.config.id, "SELECT p.owner_id FROM test_configurations c JOIN projects p ON p.id = c.project_id WHERE c.id = ?"],
+        ["document", s.document.id, "SELECT p.owner_id FROM documents d JOIN projects p ON p.id = d.project_id WHERE d.id = ?"],
+        ["testRun", s.run.id, viaRun],
+        ["testRun", s.externalRunId, viaRun],
+        ["crawlRun", s.crawl.id, "SELECT p.owner_id FROM crawl_runs c JOIN projects p ON p.id = c.project_id WHERE c.id = ?"],
+        ["bug", s.bug.id, "SELECT p.owner_id FROM bugs b JOIN projects p ON p.id = b.project_id WHERE b.id = ?"],
+        ["reportBundle", s.bundle.id, viaBundle],
+        ["storageKey", s.screenshotKey, viaRun, s.run.id],
+        ["storageKey", `reports/${s.bundle.id}/report.pdf`, viaBundle, s.bundle.id],
+        ["storageKey", s.document.storageKey, viaProject, s.project.id],
+      ] as const;
+    for (const [s, owner] of [[a, "user-alice"], [b, "user-bob"]] as const) {
+      for (const [kind, id, sql, keyId] of cases(s)) {
+        const got = await base.ownership.ownerOf(kind, id);
+        expect(got, `${kind} ${id}`).toBe(owner);
+        expect(got, `${kind} ${id} parity`).toBe(direct(sql, keyId ?? id));
+      }
+    }
+    // Unknown ids and keys without an owning resource resolve to no owner.
+    for (const kind of ["project", "configuration", "document", "testRun", "crawlRun", "bug", "reportBundle"] as const) {
+      expect(await base.ownership.ownerOf(kind, "00000000-0000-0000-0000-000000000000")).toBeNull();
+      expect(await base.ownership.ownerOf(kind, "")).toBeNull();
+    }
+    for (const key of ["runs", "external-drafts/abc/x.xlsx", "other/x", `runs/missing-run/x.png`]) expect(await base.ownership.ownerOf("storageKey", key)).toBeNull();
+  });
 
   it("lets an owner read all of their own resources", async () => {
     expect((await alice.projects.list()).map((p) => p.id)).toEqual([a.project.id]);
@@ -216,17 +251,17 @@ describe("owner-scoped data access", () => {
 
 describe("trusted identity", () => {
   it("defaults to the local operator in development and test", () => {
-    expect(resolveIdentity({ NODE_ENV: "development" })).toEqual({ ok: true, identity: { ownerId: LOCAL_OWNER_ID, source: "local" } });
+    expect(resolveIdentity({ NODE_ENV: "development" })).toEqual({ ok: true, mode: "local", identity: { ownerId: LOCAL_OWNER_ID, source: "local" } });
     expect(resolveIdentity({ NODE_ENV: "test", AUTH_PROVIDER: "local" })).toMatchObject({ ok: true });
   });
 
-  it("fails closed for production builds, Vercel, Supabase (not implemented yet) and invalid configuration", () => {
+  it("fails closed for production builds, Vercel, unconfigured Supabase and invalid configuration", () => {
     expect(resolveIdentity({ NODE_ENV: "production" })).toEqual({ ok: false, reason: "LOCAL_MODE_NOT_ALLOWED" });
     for (const flag of ["1", "TRUE", "yes", " true"]) expect(resolveIdentity({ NODE_ENV: "production", QA_PILOT_LOCAL_MODE: flag })).toMatchObject({ ok: false });
     expect(resolveIdentity({ NODE_ENV: "production", QA_PILOT_LOCAL_MODE: "true" })).toMatchObject({ ok: true });
     expect(resolveIdentity({ NODE_ENV: "development", VERCEL: "1" })).toEqual({ ok: false, reason: "LOCAL_MODE_NOT_ALLOWED" });
     expect(resolveIdentity({ NODE_ENV: "production", VERCEL: "1", QA_PILOT_LOCAL_MODE: "true" })).toEqual({ ok: false, reason: "LOCAL_MODE_NOT_ALLOWED" });
-    expect(resolveIdentity({ AUTH_PROVIDER: "supabase", NODE_ENV: "development" })).toEqual({ ok: false, reason: "AUTH_NOT_IMPLEMENTED" });
+    expect(resolveIdentity({ AUTH_PROVIDER: "supabase", NODE_ENV: "development" })).toEqual({ ok: false, reason: "SUPABASE_NOT_CONFIGURED" });
     for (const value of ["admin", "none", "LOCAL", "supabase-dev"]) expect(resolveIdentity({ AUTH_PROVIDER: value })).toMatchObject({ ok: false });
   });
 });
@@ -265,7 +300,7 @@ describe("route handlers and server actions", () => {
   };
 
   it("returns 401 from every API route when there is no identity", async () => {
-    process.env.AUTH_PROVIDER = "supabase";
+    process.env.AUTH_PROVIDER = "supabase"; // without Supabase settings: fails closed, never local
     try {
       for (const [name, res] of await routes()) expect((await res).status, name).toBe(401);
       const workers = (await import("@/app/api/workers/route")).GET;
@@ -283,9 +318,9 @@ describe("route handlers and server actions", () => {
     process.env.AUTH_PROVIDER = "supabase";
     try {
       const { actionDb, actionIdentity, routeDb } = await import("@/lib/server/db");
-      expect(() => actionDb()).toThrow(/NEXT_REDIRECT/);
-      expect(() => actionIdentity()).toThrow(/NEXT_REDIRECT/);
-      expect(routeDb().denied?.status).toBe(401);
+      await expect(actionDb()).rejects.toThrow(/NEXT_REDIRECT/);
+      await expect(actionIdentity()).rejects.toThrow(/NEXT_REDIRECT/);
+      expect((await routeDb()).denied?.status).toBe(401);
     } finally {
       delete process.env.AUTH_PROVIDER;
     }
@@ -302,11 +337,39 @@ describe("route handlers and server actions", () => {
     };
     walk(path.resolve("app"));
     walk(path.resolve("components"));
+    // Auth endpoints (sign-in, confirmation) only talk to Supabase Auth and must never open the database.
+    const authOnly = (f: string) => f.startsWith(path.resolve("app", "auth") + path.sep);
     for (const f of files) {
       const src = fs.readFileSync(f, "utf8");
+      if (authOnly(f)) {
+        expect(src, `${f} must not open the database`).not.toMatch(/@\/lib\/server\/db|@\/lib\/database/);
+        continue;
+      }
       expect(src, `${f} must not use the unscoped provider`).not.toMatch(/getDatabase\(|from "@\/lib\/database"/);
-      if (f.endsWith(`${path.sep}route.ts`)) expect(src, `${f} must check access`).toMatch(/const access = routeDb\(\);\s+if \(access\.denied\) return access\.denied;/);
-      if (/^"use server";/.test(src)) expect(src, `${f} must use actionDb`).toMatch(/actionDb\(\)/);
+      if (f.endsWith(`${path.sep}route.ts`)) expect(src, `${f} must check access`).toMatch(/const access = await routeDb\(\);\s+if \(access\.denied\) return access\.denied;/);
+      if (/^"use server";/.test(src)) expect(src, `${f} must use actionDb`).toMatch(/await actionDb\(\)/);
+    }
+  });
+
+  it("every page checks the identity at request time, except the listed public pages", () => {
+    // Public: sign-in pages decide via authPageMode(); /auth-required explains a missing identity; /copyright is static text.
+    const publicPages = ["copyright", "auth-required", "login", "signup", "forgot-password", path.join("auth", "update-password")].map((p) => path.resolve("app", p, "page.tsx"));
+    const pages: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name === "page.tsx") pages.push(p);
+      }
+    };
+    walk(path.resolve("app"));
+    for (const f of pages) {
+      const src = fs.readFileSync(f, "utf8");
+      if (publicPages.includes(f)) {
+        expect(src, `${f} must not open the database`).not.toMatch(/@\/lib\/server\/db|@\/lib\/database/);
+        continue;
+      }
+      expect(src, `${f} must call requestDb()`).toMatch(/await requestDb\(\)/);
     }
   });
 });

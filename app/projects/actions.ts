@@ -20,8 +20,8 @@ export interface ProjectFormState {
 
 const PROJECT_FIELDS = ["name", "websiteUrl", "description", "figmaUrl", "testEmail"] as const;
 
-function deps(): ProjectServiceDeps {
-  return { db: actionDb(), storage: getStorage(), maxUploadBytes: readEnv().MAX_UPLOAD_MB * 1024 * 1024 };
+async function deps(): Promise<ProjectServiceDeps> {
+  return { db: await actionDb(), storage: getStorage(), maxUploadBytes: readEnv().MAX_UPLOAD_MB * 1024 * 1024 };
 }
 
 function readProjectFields(formData: FormData): Record<string, string> {
@@ -43,7 +43,7 @@ function revalidateProjectViews(id?: string) {
 
 export async function createProjectAction(_prev: ProjectFormState, formData: FormData): Promise<ProjectFormState> {
   const values = readProjectFields(formData);
-  const result = await createProject(deps(), values, await readUpload(formData));
+  const result = await createProject(await deps(), values, await readUpload(formData));
   if (!result.ok) return { errors: result.errors, values };
   revalidateProjectViews(result.project.id);
   redirect(`/projects/${result.project.id}?created=1`);
@@ -51,7 +51,7 @@ export async function createProjectAction(_prev: ProjectFormState, formData: For
 
 export async function updateProjectAction(id: string, _prev: ProjectFormState, formData: FormData): Promise<ProjectFormState> {
   const values = readProjectFields(formData);
-  const result = await updateProject(deps(), id, values, {
+  const result = await updateProject(await deps(), id, values, {
     file: await readUpload(formData),
     removeDocument: formData.get("removeDocument") === "on",
   });
@@ -62,7 +62,7 @@ export async function updateProjectAction(id: string, _prev: ProjectFormState, f
 
 export async function deleteProjectAction(formData: FormData): Promise<void> {
   const id = String(formData.get("projectId") ?? "");
-  if (id) await deleteProject(deps(), id);
+  if (id) await deleteProject(await deps(), id);
   revalidateProjectViews();
   redirect("/projects?deleted=1");
 }
@@ -78,7 +78,7 @@ export async function saveConfigurationAction(
   prev: ConfigurationFormState,
   payload: unknown,
 ): Promise<ConfigurationFormState> {
-  const result = await saveTestConfiguration(actionDb(), projectId, prev.configurationId, payload);
+  const result = await saveTestConfiguration(await actionDb(), projectId, prev.configurationId, payload);
   if (!result.ok) return { ...prev, errors: result.errors, savedAt: null };
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/history");
@@ -88,7 +88,7 @@ export async function saveConfigurationAction(
 export async function deleteConfigurationAction(formData: FormData): Promise<void> {
   const projectId = String(formData.get("projectId") ?? "");
   const configurationId = String(formData.get("configurationId") ?? "");
-  if (projectId && configurationId) await deleteTestConfiguration(actionDb(), projectId, configurationId);
+  if (projectId && configurationId) await deleteTestConfiguration(await actionDb(), projectId, configurationId);
   revalidatePath(`/projects/${projectId}`);
   redirect(`/projects/${projectId}`);
 }

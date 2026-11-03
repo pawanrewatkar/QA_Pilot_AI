@@ -2,7 +2,7 @@ import { routeDb } from "@/lib/server/db";
 
 /** Polled by the live progress panel of an external test-case execution. */
 export async function GET(_request: Request, ctx: RouteContext<"/api/external-test-cases/[id]">) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const { id } = await ctx.params;
   const execution = await access.db.externalTests.get(id);

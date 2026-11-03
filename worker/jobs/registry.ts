@@ -1,4 +1,4 @@
-import type { SqliteEngineStore } from "@/lib/database/local/engine-store";
+import type { EngineStore } from "@/lib/database/local/engine-store";
 import type { StorageProvider } from "@/lib/storage/provider";
 import { generateReportBundle } from "@/lib/reports/generate";
 import { PlaywrightPdfRenderer } from "@/lib/reports/pdf";
@@ -11,7 +11,7 @@ export interface JobContext {
   workerId: string;
   signal: AbortSignal;
   log: (message: string) => void;
-  store: SqliteEngineStore;
+  store: EngineStore;
   storage: StorageProvider;
 }
 
@@ -30,7 +30,7 @@ export const JOB_HANDLERS: Partial<Record<JobType, JobHandler>> = {
   },
   "report.generate": async (job, ctx) => {
     const { reportBundleId, kinds } = job.payload as { reportBundleId: string; kinds?: ReportKind[] };
-    const outcome = await generateReportBundle(ctx.store.database, ctx.storage, reportBundleId, new PlaywrightPdfRenderer(), kinds);
+    const outcome = await generateReportBundle(ctx.store.sql, ctx.storage, reportBundleId, new PlaywrightPdfRenderer(), kinds);
     ctx.log(`Report ${reportBundleId} ${outcome.status}: ${outcome.files.map((f) => `${f.kind} ${f.status}`).join(", ")}`);
   },
 };

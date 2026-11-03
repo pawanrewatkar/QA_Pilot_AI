@@ -1,9 +1,11 @@
 import type { OwnedResource, OwnershipRepository } from "../provider";
-import type { SqliteDatabase } from "./sqlite-client";
+import type { SqlExecutor } from "../sql/executor";
 
 /**
  * Ownership is stored once, on `projects.owner_id`. Every other resource reaches its project either
  * directly (`project_id`) or through its test run, so ownership is resolved along that parent chain.
+ *
+ * The lookups below use only standard SQL through SqlExecutor, so they can run unchanged on PostgreSQL.
  */
 
 /** SQL fragment restricting `<column>` (a project id) to the owner's projects. Bind the owner id once. */
@@ -40,15 +42,15 @@ const QUERIES: Record<Exclude<OwnedResource, "storageKey">, string> = {
 };
 
 export class LocalOwnershipRepository implements OwnershipRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async ownerOf(resource: OwnedResource, id: string): Promise<string | null> {
     if (typeof id !== "string" || !id) return null;
     if (resource === "storageKey") {
       const q = keyOwnerQuery(id);
       if (!q) return null;
-      return (this.db.prepare(q.sql).get(q.id) as Row)?.owner_id ?? null;
+      return ((await this.sql.get(q.sql, [q.id])) as Row)?.owner_id ?? null;
     }
-    return (this.db.prepare(QUERIES[resource]).get(id) as Row)?.owner_id ?? null;
+    return ((await this.sql.get(QUERIES[resource], [id])) as Row)?.owner_id ?? null;
   }
 }

@@ -11,7 +11,7 @@ export async function updateBugStatusAction(formData: FormData): Promise<void> {
   const status = BUG_STATUSES.find((s) => s === formData.get("status")) as BugStatus | undefined;
   const note = String(formData.get("note") ?? "").trim().slice(0, 1000) || null;
   if (!id || !status) return;
-  const db = actionDb();
+  const db = await actionDb();
   const bug = await db.bugs.updateStatus(id, status, note);
   if (bug) {
     await db.activity.record({ projectId: bug.projectId, entityType: "bug", entityId: id, action: "updated", summary: `${bug.code ?? "Bug"} status set to ${status.replace(/_/g, " ")}` });
@@ -24,7 +24,7 @@ export async function updateBugStatusAction(formData: FormData): Promise<void> {
 export async function createBugsFromRunAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("testRunId") ?? "");
   if (!runId) return;
-  const db = actionDb();
+  const db = await actionDb();
   const run = await db.testRuns.getById(runId);
   if (!run || run.status === "PENDING" || run.status === "RUNNING") return;
   const summary = await db.bugs.createFromRun(runId);

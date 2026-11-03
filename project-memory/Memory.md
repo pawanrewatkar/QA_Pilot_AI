@@ -211,12 +211,12 @@ Storage: local filesystem (data/storage)   DB: data/qa-pilot.db
 - **No hostile anti-copy techniques.**
 
 ### 4.5 Security (implemented)
-- **Secrets.** Environment variables are read only on the server (`lib/config/env.ts`, zod); there are no `NEXT_PUBLIC_` variables. Settings shows only whether a key is present.
+- **Secrets.** Environment variables are read only on the server (`lib/config/env.ts`, zod). The only `NEXT_PUBLIC_` variables are the public Supabase URL and publishable key and the site URL. `AUTH_ALLOWED_EMAILS` is server-only. Settings shows only whether a key is present.
 - **Redaction.** Text in reports, bugs and worker logs is redacted: URL credentials, sensitive query parameters, bearer and basic tokens, JWTs, password and API-key values, card numbers; email addresses are masked.
 - **Screenshots.** Password, payment, one-time-code and `data-sensitive` fields are masked in screenshots.
 - **Uploads.** Uploads are allow-listed and checked by size and file signature. Storage keys are validated, so paths cannot escape the storage folder. Download file names are sanitized. Excel content is treated as data only.
 - **HTTP headers.** Responses send `nosniff`, Referrer-Policy, `X-Frame-Options: SAMEORIGIN` and Permissions-Policy.
-- **No authentication.** Use the app only on a trusted machine. The server actions are marked where auth checks belong.
+- **Authentication and authorization.** These were added in Step 1 (ownership) and Step 2 (Supabase Auth); see §11. Local mode (default) has no sign-in and is for a trusted machine only.
 
 ---
 
@@ -489,3 +489,37 @@ Phase 7 so far is preparation only. No database migration, no deleted files, no 
 - **Vercel:** function time limits and the 4.5 MB body limit; no persistent disk.
 - **Security:** there is no authentication yet, so a public deployment would expose every project, every report and the job trigger.
 - **Local-path test-case source:** not meaningful on Vercel; it should be disabled there.
+
+---
+
+## 11. Authentication (Step 1 ownership + Step 2 Supabase Auth; 2026-10-27)
+
+Branch `feat/supabase-auth`. Step 1 is committed in `efb5d55` (on `origin/main`); Step 2 is committed locally in `910587e` (not pushed). Nothing has been deployed, and data stays in SQLite.
+
+- **Identity.** `lib/auth/identity.ts` decides the identity, in one of two modes.
+  - **Local** (`AUTH_PROVIDER=local`, the default): the owner is `local:default`. Local mode is refused on Vercel, and a production build needs `QA_PILOT_LOCAL_MODE=true`.
+  - **Supabase:** valid `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or the legacy `…ANON_KEY`) and `NEXT_PUBLIC_SITE_URL` are required. Otherwise the result is `SUPABASE_NOT_CONFIGURED` (fail closed, never local).
+  - **Per request:** `lib/auth/request-identity.ts` runs `getRequestIdentity()` (React `cache`), which calls `supabase.auth.getUser()` and then `identityFromVerifiedUser`. That check requires:
+    - a UUID id;
+    - a valid email;
+    - `email_confirmed_at` set;
+    - the email currently in `AUTH_ALLOWED_EMAILS`.
+
+    The owner id is the Supabase user id.
+- **Data access.** `lib/server/db.ts` is now async: `await requestDb()`, `await actionDb()`, `await actionIdentity()`, `await routeDb()`. When there is no identity:
+  - routes get a 401;
+  - pages and actions redirect to `/login` (Supabase mode) or `/auth-required`.
+
+  The static test checks that every route and action uses these helpers.
+- **Auth flows.** Server actions are in `app/auth/actions.ts`; messages are in `lib/auth/messages.ts` (a `"use server"` file may export only async functions).
+  - Pages: `/login`, `/signup`, `/forgot-password`, `/auth/update-password`.
+  - Callback: `/auth/confirm` takes `token_hash`+`type` or `code`, and re-checks the user afterwards.
+  - Sign-out is in the app shell (Supabase mode only).
+- **Sessions.** Supabase SSR cookies are httpOnly, `sameSite=lax`, and `secure` on https. There is no browser Supabase client. `proxy.ts` (Next 16) refreshes the session and redirects signed-out page requests to `/login?next=…`; API routes are not redirected.
+- **Packages.** `@supabase/ssr` 0.12.7 and `@supabase/supabase-js` 2.118.0 (exact versions). `engines.node` is `>=22.19.0`.
+- **Tests.** `tests/supabase-auth.test.ts` (35 tests) mocks `@supabase/ssr` and `next/headers`; no real Supabase is contacted. It sets `DATABASE_PATH` to a temp file. **Every test that reaches `lib/server/db` must do the same**, otherwise it opens `./data/qa-pilot.db`.
+- **Incident (2026-10-27 19:39 IST).** Before that fix, one run of the new test opened the live `data/qa-pilot.db`, which applied migration 7 (additive: `owner_id` columns and indexes; activity_log rows were backfilled with the local owner). No rows were removed and no existing values changed. The pre-Phase 7 backup in `data/backups/pre-phase7-20261026-211401/` is intact; restore from it only if the user decides to.
+- **Open items before any public deployment.**
+  - Next.js was upgraded to 16.4.3 on 2026-10-27; this fixes GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr and GHSA-p3m5-59mp-jv5r. The remaining npm audit items are transitive or older dependencies: zod, vite, chromium-bidi, puppeteer-core, fast-uri, and exceljs/uuid (fixing that one needs a major version change).
+  - Supabase dashboard settings: site URL, redirect URLs, email templates using `/auth/confirm?token_hash=…`, confirm-email on, disable public sign-ups or add a before-user-created hook, and decide on SMTP.
+  - Hosted database and storage (data is still local SQLite).

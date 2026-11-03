@@ -2,7 +2,7 @@ import { routeDb } from "@/lib/server/db";
 
 /** Polled by the crawl progress panel. */
 export async function GET(_request: Request, ctx: RouteContext<"/api/crawl-runs/[id]">) {
-  const access = routeDb();
+  const access = await routeDb();
   if (access.denied) return access.denied;
   const { id } = await ctx.params;
   const crawl = await access.db.crawlRuns.getById(id);

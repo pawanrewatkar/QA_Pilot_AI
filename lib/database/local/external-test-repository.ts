@@ -2,22 +2,21 @@ import { randomUUID } from "node:crypto";
 import { aggregateStatus } from "@/lib/external-tests/status";
 import { EXTERNAL_STATUSES, type ExternalCaseRecord, type ExternalCounts, type ExternalExecutionRecord, type ExternalStatus, type NewExternalExecution } from "@/lib/external-tests/types";
 import type { ExternalTestRepository } from "../provider";
+import type { SqlExecutor, SqlValue } from "../sql/executor";
 import { createRunAndEnqueue } from "./engine-repositories";
-import type { SqliteDatabase } from "./sqlite-client";
 
 type Row = Record<string, unknown>;
 const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
 const emptyCounts = (): ExternalCounts => Object.fromEntries(EXTERNAL_STATUSES.map((s) => [s, 0])) as ExternalCounts;
 
 export class LocalExternalTestRepository implements ExternalTestRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly sql: SqlExecutor) {}
 
   async create(input: NewExternalExecution): Promise<string> {
-    let runId = "";
-    this.db.transaction(() => {
+    return this.sql.transaction(async (tx) => {
       // The execution is a test run of type EXTERNAL_TEST_CASE running the "external" module, so progress,
       // cancellation, evidence, bugs, reports and history all use the existing run infrastructure.
-      runId = createRunAndEnqueue(this.db, {
+      const runId = await createRunAndEnqueue(tx, {
         projectId: input.projectId,
         configurationId: null,
         name: input.name,
@@ -29,29 +28,38 @@ export class LocalExternalTestRepository implements ExternalTestRepository {
         options: { allowFormSubmission: input.allowFormSubmission, maxLinksPerPage: 1, navigationTimeoutMs: input.navigationTimeoutMs, reports: { formats: [] } },
         runType: "EXTERNAL_TEST_CASE",
       });
-      this.db
-        .prepare(
-          `INSERT INTO external_test_executions (test_run_id, project_id, website_url, source_kind, source_name, source_storage_key, worksheet, header_row, mapping, output_mode, created_at)
+      await tx.run(
+        `INSERT INTO external_test_executions (test_run_id, project_id, website_url, source_kind, source_name, source_storage_key, worksheet, header_row, mapping, output_mode, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(runId, input.projectId, input.websiteUrl, input.source.kind, input.source.name, input.source.storageKey, input.worksheet, input.headerRow, JSON.stringify(input.mapping), input.outputMode, new Date().toISOString());
-      const insert = this.db.prepare(
-        "INSERT INTO external_test_cases (id, test_run_id, row_number, case_ref, title, steps, expected, url, test_data, preconditions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [runId, input.projectId, input.websiteUrl, input.source.kind, input.source.name, input.source.storageKey, input.worksheet, input.headerRow, JSON.stringify(input.mapping), input.outputMode, new Date().toISOString()],
       );
-      for (const c of input.cases) insert.run(randomUUID(), runId, c.rowNumber, c.caseRef, c.title, c.steps, c.expected, c.url, c.testData, c.preconditions);
-    })();
-    return runId;
+      for (const c of input.cases) {
+        await tx.run("INSERT INTO external_test_cases (id, test_run_id, row_number, case_ref, title, steps, expected, url, test_data, preconditions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+          randomUUID(),
+          runId,
+          c.rowNumber,
+          c.caseRef,
+          c.title,
+          c.steps,
+          c.expected,
+          c.url,
+          c.testData,
+          c.preconditions,
+        ]);
+      }
+      return runId;
+    });
   }
 
-  private caseStatuses(runIds: string[]) {
+  private async caseStatuses(runIds: string[]) {
     // Live status per case: the final status once set, otherwise the worst status observed so far.
     const out = new Map<string, { counts: ExternalCounts; completed: number; total: number }>();
     if (!runIds.length) return out;
     const marks = runIds.map(() => "?").join(",");
-    const cases = this.db.prepare(`SELECT id, test_run_id, status FROM external_test_cases WHERE test_run_id IN (${marks})`).all(...runIds) as Row[];
-    const obs = this.db.prepare(`SELECT external_case_id, status FROM external_test_observations WHERE test_run_id IN (${marks})`).all(...runIds) as Row[];
+    const cases = await this.sql.all<Row>(`SELECT id, test_run_id, status FROM external_test_cases WHERE test_run_id IN (${marks})`, runIds);
+    const obs = await this.sql.all<Row>(`SELECT external_case_id, status FROM external_test_observations WHERE test_run_id IN (${marks})`, runIds);
     const combos = new Map(
-      (this.db.prepare(`SELECT id, config_snapshot FROM test_runs WHERE id IN (${marks})`).all(...runIds) as Row[]).map((r) => {
+      (await this.sql.all<Row>(`SELECT id, config_snapshot FROM test_runs WHERE id IN (${marks})`, runIds)).map((r) => {
         const s = JSON.parse(String(r.config_snapshot)) as { browsers?: string[]; viewports?: string[] };
         return [String(r.id), (s.browsers?.length ?? 1) * (s.viewports?.length ?? 1)];
       }),
@@ -77,8 +85,8 @@ export class LocalExternalTestRepository implements ExternalTestRepository {
     return out;
   }
 
-  private map(rows: Row[]): ExternalExecutionRecord[] {
-    const stats = this.caseStatuses(rows.map((r) => String(r.test_run_id)));
+  private async map(rows: Row[]): Promise<ExternalExecutionRecord[]> {
+    const stats = await this.caseStatuses(rows.map((r) => String(r.test_run_id)));
     return rows.map((r) => {
       const s = stats.get(String(r.test_run_id)) ?? { counts: emptyCounts(), completed: 0, total: 0 };
       const snapshot = JSON.parse(String(r.config_snapshot ?? "{}")) as { browsers?: string[]; viewports?: string[] };
@@ -116,13 +124,13 @@ export class LocalExternalTestRepository implements ExternalTestRepository {
     FROM external_test_executions e JOIN test_runs r ON r.id = e.test_run_id JOIN projects p ON p.id = e.project_id`;
 
   async get(runId: string): Promise<ExternalExecutionRecord | null> {
-    const row = this.db.prepare(`${this.select} WHERE e.test_run_id = ?`).get(runId) as Row | undefined;
-    return row ? this.map([row])[0] : null;
+    const row = await this.sql.get<Row>(`${this.select} WHERE e.test_run_id = ?`, [runId]);
+    return row ? (await this.map([row]))[0] : null;
   }
 
   private scope(q: { ownerId?: string; projectId?: string }) {
     const where: string[] = [];
-    const params: unknown[] = [];
+    const params: SqlValue[] = [];
     if (q.projectId) {
       where.push("e.project_id = ?");
       params.push(q.projectId);
@@ -136,32 +144,34 @@ export class LocalExternalTestRepository implements ExternalTestRepository {
 
   async list(q: { ownerId?: string; projectId?: string; limit?: number; offset?: number } = {}): Promise<ExternalExecutionRecord[]> {
     const { sql, params } = this.scope(q);
-    const rows = this.db
-      .prepare(`${this.select} ${sql} ORDER BY e.created_at DESC, e.rowid DESC LIMIT ? OFFSET ?`)
-      .all(...params, Math.min(Math.max(q.limit ?? 20, 1), 200), Math.max(q.offset ?? 0, 0)) as Row[];
+    const rows = await this.sql.all<Row>(`${this.select} ${sql} ORDER BY e.created_at DESC, e.rowid DESC LIMIT ? OFFSET ?`, [
+      ...params,
+      Math.min(Math.max(q.limit ?? 20, 1), 200),
+      Math.max(q.offset ?? 0, 0),
+    ]);
     return this.map(rows);
   }
 
   async count(q: { ownerId?: string; projectId?: string } = {}): Promise<number> {
     const { sql, params } = this.scope(q);
-    return Number((this.db.prepare(`SELECT COUNT(*) AS c FROM external_test_executions e ${sql}`).get(...params) as Row).c);
+    return Number(((await this.sql.get<Row>(`SELECT COUNT(*) AS c FROM external_test_executions e ${sql}`, params)) as Row).c);
   }
 
   async listCases(runId: string, q: { status?: ExternalStatus; limit?: number; offset?: number } = {}): Promise<{ rows: ExternalCaseRecord[]; total: number }> {
     const where = ["c.test_run_id = ?"];
-    const params: unknown[] = [runId];
+    const params: SqlValue[] = [runId];
     if (q.status) {
       where.push("c.status = ?");
       params.push(q.status);
     }
-    const total = Number((this.db.prepare(`SELECT COUNT(*) AS c FROM external_test_cases c WHERE ${where.join(" AND ")}`).get(...params) as Row).c);
-    const rows = this.db
-      .prepare(`SELECT c.* FROM external_test_cases c WHERE ${where.join(" AND ")} ORDER BY c.row_number LIMIT ? OFFSET ?`)
-      .all(...params, Math.min(Math.max(q.limit ?? 50, 1), 500), Math.max(q.offset ?? 0, 0)) as Row[];
+    const total = Number(((await this.sql.get<Row>(`SELECT COUNT(*) AS c FROM external_test_cases c WHERE ${where.join(" AND ")}`, params)) as Row).c);
+    const rows = await this.sql.all<Row>(`SELECT c.* FROM external_test_cases c WHERE ${where.join(" AND ")} ORDER BY c.row_number LIMIT ? OFFSET ?`, [
+      ...params,
+      Math.min(Math.max(q.limit ?? 50, 1), 500),
+      Math.max(q.offset ?? 0, 0),
+    ]);
     const ids = rows.map((r) => String(r.id));
-    const obs = ids.length
-      ? (this.db.prepare(`SELECT * FROM external_test_observations WHERE external_case_id IN (${ids.map(() => "?").join(",")}) ORDER BY observed_at`).all(...ids) as Row[])
-      : [];
+    const obs = ids.length ? await this.sql.all<Row>(`SELECT * FROM external_test_observations WHERE external_case_id IN (${ids.map(() => "?").join(",")}) ORDER BY observed_at`, ids) : [];
     return {
       total,
       rows: rows.map((r) => ({
@@ -189,7 +199,7 @@ export class LocalExternalTestRepository implements ExternalTestRepository {
   }
 
   async getOutputFile(runId: string): Promise<{ storageKey: string; fileName: string } | null> {
-    const row = this.db.prepare("SELECT output_storage_key, output_file_name FROM external_test_executions WHERE test_run_id = ?").get(runId) as Row | undefined;
+    const row = await this.sql.get<Row>("SELECT output_storage_key, output_file_name FROM external_test_executions WHERE test_run_id = ?", [runId]);
     return row?.output_storage_key ? { storageKey: String(row.output_storage_key), fileName: String(row.output_file_name) } : null;
   }
 }

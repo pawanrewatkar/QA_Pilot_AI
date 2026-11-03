@@ -62,7 +62,10 @@ describe.skipIf(!built || !browserInstalled("chromium"))("complete workflow thro
     dataDir = makeTempDir("qa-pilot-e2e-");
     const port = await freePort();
     base = `http://127.0.0.1:${port}`;
-    const env = { ...process.env, DATABASE_PROVIDER: "local", DATABASE_PATH: path.join(dataDir, "qa.db"), STORAGE_PATH: path.join(dataDir, "storage"), NODE_ENV: "production" as const, QA_PILOT_LOCAL_MODE: "true" };
+    const env: NodeJS.ProcessEnv = { ...process.env, DATABASE_PROVIDER: "local", DATABASE_PATH: path.join(dataDir, "qa.db"), STORAGE_PATH: path.join(dataDir, "storage"), NODE_ENV: "production", QA_PILOT_LOCAL_MODE: "true" };
+    // This test runs the app and worker as a local operator would. In CI the runner sets GITHUB_ACTIONS=true, which makes
+    // the worker refuse local SQLite/files (that guard is for the hosted worker), so it is not passed on.
+    delete env.GITHUB_ACTIONS;
     const capture = (name: string) => (chunk: Buffer) => logs.push(`[${name}] ${chunk.toString()}`);
     web = spawn(process.execPath, [path.join(ROOT, "node_modules/next/dist/bin/next"), "start", "-p", String(port), "-H", "127.0.0.1"], { cwd: ROOT, env });
     web.stdout?.on("data", capture("web"));
