@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
+import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
 import { TestRunForm } from "@/components/test-runs/test-run-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -76,7 +77,7 @@ export default async function NewTestRunPage({ searchParams }: PageProps<"/test-
         title="New test run"
         description={`Executes real browser tests against ${displayHost(project.websiteUrl)}. Results appear live as each check completes.`}
       />
-      <WorkerStatusBanner initial={worker} />
+      <WorkerStatusBanner initial={worker} launch={currentWorkerLaunchMode()} />
       {testable.length === 0 ? (
         <EmptyState
           icon={Globe}

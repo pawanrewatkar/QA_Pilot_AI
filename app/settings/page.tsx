@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { readEnv } from "@/lib/config/env";
 import { getProviderStatuses, type ProviderConfigState } from "@/lib/providers/status";
 import { requestDb } from "@/lib/server/db";
+import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -28,6 +29,12 @@ const STATE_BADGE: Record<ProviderConfigState, { label: string; variant: "succes
   NOT_CONFIGURED: { label: "Not Configured", variant: "muted" },
   LOCAL: { label: "Local", variant: "default" },
 };
+
+const WORKER_OFFLINE_HINT = {
+  "github-auto": "Not running right now: a worker starts automatically on GitHub Actions when work is queued, and hourly for anything missed.",
+  "github-manual": "Crawls and test runs only execute while a worker runs. Start one on GitHub: Actions → QA worker → Run workflow (also runs hourly).",
+  local: "Crawls and test runs only execute while the worker runs. Start it with npm run worker (or npm run dev:all).",
+} as const;
 
 export default async function SettingsPage() {
   const db = await requestDb();
@@ -61,7 +68,7 @@ export default async function SettingsPage() {
           <p className="mt-1 text-muted-foreground">
             {worker.online
               ? `Handling: ${worker.handlers.join(", ")}. Last heartbeat ${worker.lastSeenAt}.`
-              : "Crawls and test runs only execute while the worker runs. Start it with npm run worker (or npm run dev:all)."}
+              : WORKER_OFFLINE_HINT[currentWorkerLaunchMode()]}
           </p>
         </div>
       </Alert>

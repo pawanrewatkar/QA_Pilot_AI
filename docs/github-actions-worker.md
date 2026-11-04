@@ -21,16 +21,26 @@ worker as local development (`npm run worker -- --once`) on a GitHub-hosted runn
 
 ## Trigger
 
-**Manual only** (Actions → QA worker → Run workflow). Jobs queued in the app wait until a run is started. Options for
-later, each needing its own approval:
+- **Started by the app** (`workflow_dispatch` through the GitHub API): when a crawl, test run, report or external
+  execution is queued, the web app asks GitHub to start this workflow after sending its response
+  (`lib/worker/dispatch.ts`). It needs `GITHUB_WORKER_TOKEN` and `GITHUB_WORKER_REPOSITORY` on Vercel (below); without
+  them nothing is sent and runs are started manually. At most one request per 30 seconds per server instance; the
+  workflow runs one worker at a time, so extra requests wait (GitHub keeps at most one waiting run).
+- **Hourly schedule** (`cron: 23 * * * *`): a safety net for anything a failed start left queued. GitHub may start
+  scheduled runs late, runs them only from the default branch, and pauses them after 60 days without repository
+  activity. A run with an empty queue exits after setup (a few runner minutes; free for public repositories).
+- **By hand**: Actions → QA worker → Run workflow.
 
-- **Schedule** (`on: schedule`, at most every 5 minutes, often delayed, only from the default branch; GitHub disables
-  schedules in repositories without activity for 60 days). Simple, but most runs find an empty queue (minutes cost).
-- **Dispatch from the app** (`workflow_dispatch` through the GitHub API when a job is queued). Immediate, but the web
-  app needs a server-side GitHub token limited to this repository with `Actions: write` only, stored as a Vercel
-  secret.
+The app's worker banner says which of these applies (automatic, manual on GitHub, or `npm run worker` locally).
 
-While no worker is running, the app's worker banner shows the worker as offline; that is expected with on-demand runs.
+### Token for automatic starts (`GITHUB_WORKER_TOKEN`)
+
+A **fine-grained personal access token**: GitHub → Settings → Developer settings → Personal access tokens →
+Fine-grained tokens → Generate new token. Resource owner: the repository owner; Repository access: **only this
+repository**; Repository permissions: **Actions: Read and write** (Metadata: read-only is added automatically); an
+expiration date. Store it only as a Vercel **Secret** (Production); never in the repository or a `NEXT_PUBLIC_`
+variable. It can start workflows in this repository but cannot read code or secrets. When it expires, automatic starts
+stop (the app logs `[worker-dispatch] … HTTP 401`) and the hourly run keeps queued work moving until it is replaced.
 
 ## Required GitHub settings (not done)
 

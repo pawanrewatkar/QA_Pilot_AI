@@ -36,6 +36,15 @@ const envSchema = z.object({
   SMTP_URL: z.string().optional(),
   /** Worker only: stop claiming new jobs after this many minutes (for time-limited runners such as GitHub Actions). */
   WORKER_MAX_RUNTIME_MINUTES: z.coerce.number().positive().max(360).optional(),
+  /**
+   * Web app only: start the GitHub Actions worker when work is queued (lib/worker/dispatch.ts). Server-only secret: a
+   * fine-grained token for this one repository with Actions read & write. Unset = runs are started manually.
+   */
+  GITHUB_WORKER_TOKEN: z.string().optional(),
+  /** `owner/repository` that holds the worker workflow, e.g. pawanrewatkar/QA_Pilot_AI. */
+  GITHUB_WORKER_REPOSITORY: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "must be owner/repository").optional(),
+  GITHUB_WORKER_WORKFLOW: z.string().regex(/^[\w.-]+\.ya?ml$/, "must be a workflow file name such as qa-worker.yml").default("qa-worker.yml"),
+  GITHUB_WORKER_REF: z.string().regex(/^[\w./-]+$/, "must be a branch name").default("main"),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

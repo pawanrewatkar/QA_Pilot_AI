@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { SubmitButton } from "@/components/shared/submit-button";
 import { PageHeader } from "@/components/shared/page-header";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
+import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
 import { moduleLabel, ResultsTable, viewportLabel } from "@/components/test-runs/results-table";
 import { RunProgress } from "@/components/test-runs/run-progress";
 import { DetailTabs, DetailView } from "@/components/test-runs/detail-view";
@@ -117,7 +118,7 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
           </>
         }
       />
-      {run.status === "PENDING" || run.status === "RUNNING" ? <WorkerStatusBanner initial={worker} /> : null}
+      {run.status === "PENDING" || run.status === "RUNNING" ? <WorkerStatusBanner initial={worker} launch={currentWorkerLaunchMode()} /> : null}
       {/* Remount when server state changes so the live panel never shows a stale status. */}
       <RunProgress key={`${run.status}-${run.cancelRequested}`} initial={run} />
 

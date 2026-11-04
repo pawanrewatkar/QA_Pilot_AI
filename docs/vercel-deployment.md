@@ -51,6 +51,11 @@ Values are never stored in the repository. Secrets: mark **Sensitive**.
 | `SUPABASE_SECRET_KEY` | secret key (`sb_secret_…`), Storage only | **server only, Sensitive** |
 | `STORAGE_BUCKET` | `qa-pilot-artifacts` (default) | server |
 
+Optional, to start the GitHub Actions worker automatically when work is queued (see
+`docs/github-actions-worker.md` → Trigger): `GITHUB_WORKER_TOKEN` (**Sensitive**; fine-grained token, this repository
+only, Actions read & write) and `GITHUB_WORKER_REPOSITORY` (`owner/repository`). `GITHUB_WORKER_WORKFLOW`
+(default `qa-worker.yml`) and `GITHUB_WORKER_REF` (default `main`) rarely need setting.
+
 Do **not** set on Vercel: `QA_PILOT_LOCAL_MODE`, `DATABASE_PATH`, `STORAGE_PATH`, `EXTERNAL_TEST_CASES_DIR`,
 `WORKER_MAX_RUNTIME_MINUTES`, or any `NEXT_PUBLIC_` name for a secret.
 

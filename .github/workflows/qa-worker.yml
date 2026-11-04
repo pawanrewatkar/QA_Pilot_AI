@@ -5,8 +5,10 @@
 # when the queue is empty (or the runtime limit is reached). Nothing is published from this workflow: no GitHub
 # artifacts, no caches containing results. See docs/github-actions-worker.md before enabling it.
 #
-# Triggers: manual only for now. A schedule (and dispatch from the app) can be added once the manual runs are verified;
-# see the documentation.
+# Triggers:
+# - workflow_dispatch: started by the web app when work is queued (GITHUB_WORKER_TOKEN, lib/worker/dispatch.ts), or by
+#   hand (Actions -> QA worker -> Run workflow).
+# - schedule: hourly safety net for anything a failed start left queued; a run with an empty queue exits right away.
 name: QA worker
 
 on:
@@ -16,6 +18,8 @@ on:
         description: Stop claiming new jobs after this many minutes (the job in progress always finishes)
         required: false
         default: "45"
+  schedule:
+    - cron: "23 * * * *"
 
 # Least privilege: the workflow only reads the repository. It never writes to GitHub.
 permissions:
