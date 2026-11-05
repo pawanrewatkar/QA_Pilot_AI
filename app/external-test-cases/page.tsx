@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Pagination, readPage } from "@/components/shared/pagination";
 import { RunStatusBadge } from "@/components/shared/status-badges";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
+import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -37,7 +38,7 @@ export default async function ExternalTestCasesPage({ searchParams }: PageProps<
         title="External Test Case Testing"
         description="Run your own test cases from an Excel workbook against a website. Steps are executed in real browsers, actual behaviour is compared with the expected result, and the results are written back to Excel."
       />
-      <WorkerStatusBanner initial={worker} />
+      <WorkerStatusBanner initial={worker} launch={currentWorkerLaunchMode()} />
 
       <Card className="overflow-hidden">
         <CardHeader>

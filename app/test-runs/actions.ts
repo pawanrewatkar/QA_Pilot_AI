@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actionDb } from "@/lib/server/db";
 import { createTestRun } from "@/lib/services/engine";
+import { startWorkerAfterResponse } from "@/lib/server/worker-dispatch";
 import type { TestRunFieldErrors } from "@/lib/validation/test-run";
 
 // Every action resolves the trusted identity through actionDb() (owner-scoped data access; redirects when there is none).
@@ -15,6 +16,7 @@ export interface TestRunFormState {
 export async function createTestRunAction(_prev: TestRunFormState, payload: unknown): Promise<TestRunFormState> {
   const result = await createTestRun(await actionDb(), payload);
   if (!result.ok) return { errors: result.errors };
+  startWorkerAfterResponse();
   revalidatePath("/test-runs");
   revalidatePath("/");
   redirect(`/test-runs/${result.run.id}`);

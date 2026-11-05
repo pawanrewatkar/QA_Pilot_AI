@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { readEnv } from "@/lib/config/env";
 import { sharedWorkbookFolder } from "@/lib/external-tests/shared-folder";
 import { actionDb, actionIdentity } from "@/lib/server/db";
+import { startWorkerAfterResponse } from "@/lib/server/worker-dispatch";
 import type { ColumnMapping, OutputMode, SourceKind } from "@/lib/external-tests/types";
 import { inspectDraftSheet, inspectSource, startExternalExecution, type DraftInspection, type ExternalTestDeps, type Result, type SheetInspection, type SourceInput } from "@/lib/services/external-tests";
 import { getStorage } from "@/lib/storage";
@@ -60,6 +61,7 @@ export interface StartPayload {
 export async function startExecutionAction(payload: StartPayload): Promise<{ error: string }> {
   const res = await startExternalExecution(await deps(), payload);
   if (!res.ok) return { error: res.error };
+  startWorkerAfterResponse();
   revalidatePath("/external-test-cases");
   revalidatePath("/history");
   redirect(`/external-test-cases/${res.value.runId}`);

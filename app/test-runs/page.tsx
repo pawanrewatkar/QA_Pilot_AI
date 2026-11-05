@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { ProjectFilter, readProjectParam } from "@/components/shared/project-filter";
 import { RunStatusBadge } from "@/components/shared/status-badges";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
+import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -34,7 +35,7 @@ export default async function TestRunsPage({ searchParams }: PageProps<"/test-ru
           </Button>
         }
       />
-      {hasActive ? <WorkerStatusBanner initial={worker} /> : <WorkerStatusBanner initial={worker} compact />}
+      {hasActive ? <WorkerStatusBanner initial={worker} launch={currentWorkerLaunchMode()} /> : <WorkerStatusBanner initial={worker} launch={currentWorkerLaunchMode()} compact />}
       <ProjectFilter projects={projects} selected={projectId} basePath="/test-runs" />
       {runs.length === 0 ? (
         <EmptyState

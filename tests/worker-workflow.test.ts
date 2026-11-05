@@ -26,9 +26,10 @@ const job = workflow.jobs.worker;
 const workerStep = job.steps.find((s) => s.name === "Run worker")!;
 
 describe("worker workflow", () => {
-  it("runs only when started manually (no pull request, push or other untrusted triggers)", () => {
-    expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
-    expect(text).not.toMatch(/pull_request_target|pull_request|^\s*push:/m);
+  it("runs only when started (by the app or by hand) or on the hourly schedule — no pull request, push or other untrusted triggers", () => {
+    expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+    expect(workflow.on.schedule).toEqual([{ cron: "23 * * * *" }]);
+    expect(text).not.toMatch(/pull_request_target|pull_request|^\s*push:|workflow_run|repository_dispatch/m);
   });
 
   it("has read-only permissions and no job-level escalation", () => {

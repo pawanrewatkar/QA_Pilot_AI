@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { actionDb } from "@/lib/server/db";
 import { addManualPages, startCrawl } from "@/lib/services/engine";
+import { startWorkerAfterResponse } from "@/lib/server/worker-dispatch";
 import type { CrawlFieldErrors } from "@/lib/validation/crawl";
 
 // Every action resolves the trusted identity through actionDb() (owner-scoped data access; redirects when there is none).
@@ -18,6 +19,7 @@ export async function startCrawlAction(projectId: string, _prev: CrawlFormState,
   );
   const result = await startCrawl(await actionDb(), projectId, raw);
   if (!result.ok) return { errors: result.errors, startedId: null };
+  startWorkerAfterResponse();
   revalidatePath(`/projects/${projectId}/pages`);
   return { errors: {}, startedId: result.crawl.id };
 }

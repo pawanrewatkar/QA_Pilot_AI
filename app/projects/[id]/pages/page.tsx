@@ -6,6 +6,7 @@ import { CrawlPanel } from "@/components/crawl/crawl-panel";
 import { PagesTable } from "@/components/crawl/pages-table";
 import { PageHeader } from "@/components/shared/page-header";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
+import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
 import { Button } from "@/components/ui/button";
 import { requestDb } from "@/lib/server/db";
 
@@ -37,7 +38,7 @@ export default async function ProjectPagesPage({ params }: PageProps<"/projects/
           </Button>
         }
       />
-      <WorkerStatusBanner initial={worker} />
+      <WorkerStatusBanner initial={worker} launch={currentWorkerLaunchMode()} />
       <CrawlPanel projectId={id} websiteUrl={project.websiteUrl} latest={latest} />
       <PagesTable projectId={id} pages={pages} websiteHost={new URL(project.websiteUrl).host} />
     </div>

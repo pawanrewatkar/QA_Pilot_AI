@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actionDb } from "@/lib/server/db";
+import { startWorkerAfterResponse } from "@/lib/server/worker-dispatch";
 import { bundlePrefix } from "@/lib/reports/paths";
 import { getStorage } from "@/lib/storage";
 
@@ -17,6 +18,7 @@ export async function generateReportAction(formData: FormData): Promise<void> {
     const bundle = await db.reports.requestBundle(runId);
     await db.activity.record({ projectId: bundle.projectId, entityType: "report", entityId: bundle.id, action: "created", summary: `Report requested: ${bundle.name}` });
     requested = true;
+    startWorkerAfterResponse();
   } catch {
     // Unfinished or missing runs are rejected by the repository; the page shows the run's state.
   }
