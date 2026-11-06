@@ -99,8 +99,8 @@ export default async function SettingsPage() {
                 <CardContent className="space-y-2 text-sm">
                   <p className="text-muted-foreground">{p.detail}</p>
                   {p.envKeys.length ? (
-                    <p className="text-xs text-muted-foreground">
-                      Environment: {p.envKeys.map((k) => <code key={k} className="mr-1 rounded bg-muted px-1 py-0.5">{k}</code>)}
+                    <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                      Environment: {p.envKeys.map((k) => <code key={k} className="max-w-full break-all rounded bg-muted px-1 py-0.5">{k}</code>)}
                     </p>
                   ) : null}
                 </CardContent>
