@@ -146,7 +146,7 @@ function resultsTable(id: string, rows: ReportResult[], interactive: boolean, em
   return table(id, rows, [
     { label: "ID", cell: (r) => `<code>${esc(r.code)}</code>` },
     { label: "Status", cell: (r) => pill(r.status) },
-    { label: "Test case", cell: (r) => `<b>${esc(r.title)}</b>${r.element ? `<div class="muted">${esc(r.element)}</div>` : ""}` },
+    { label: "Test case", cell: (r) => `<b>${esc(r.title)}</b>` },
     { label: "Type", cell: (r) => esc(r.moduleLabel) + (r.scenarioType ? `<div class="muted">${esc(r.scenarioType.toLowerCase())}</div>` : "") },
     { label: "Page", cell: (r) => `<span class="url">${esc(r.pageUrl)}</span>` },
     { label: "Browser / viewport", cell: (r) => `${esc(r.browser)}<div class="muted">${esc(viewportLabel(r.viewport))}</div>` },
@@ -365,13 +365,11 @@ export function renderReportHtml(data: ReportData, options: HtmlOptions): string
                 <dt>Page</dt><dd><span class="url">${esc(b.pageUrl)}</span>${b.pageName ? ` (${esc(b.pageName)})` : ""}</dd>
                 <dt>Test type</dt><dd>${esc(b.testType)}${b.scenarioType ? ` · ${esc(b.scenarioType.toLowerCase())}` : ""}${b.section ? ` · ${esc(b.section)}` : ""}</dd>
                 <dt>Device / browser</dt><dd>${esc(b.device)} · ${esc(b.browser)}</dd>
-                ${b.element ? `<dt>Element</dt><dd>${esc(b.element)}</dd>` : ""}
-                ${b.selector ? `<dt>Selector</dt><dd><code>${esc(b.selector)}</code></dd>` : ""}
                 <dt>Expected</dt><dd class="long">${esc(b.expected)}</dd>
                 <dt>Actual</dt><dd class="long">${esc(b.actual)}</dd>
                 <dt>Steps to reproduce</dt><dd class="long">${esc(b.steps)}</dd>
                 ${b.technicalDetails ? `<dt>Technical details</dt><dd class="long"><code>${esc(b.technicalDetails.length > 3000 ? b.technicalDetails.slice(0, 3000) + "…" : b.technicalDetails)}</code></dd>` : ""}
-                <dt>Created</dt><dd>${fmtDate(b.createdAt)} · seen ${b.occurrences} time(s)</dd>
+                <dt>Created</dt><dd>${fmtDate(b.createdAt)}</dd>
               </dl>
               ${img ? `<figure class="shots"><img src="${img}" alt="Screenshot evidence for ${esc(b.code)}" loading="lazy"></figure>` : b.screenshotKey ? `<p class="note">Screenshot: ${esc(b.screenshotKey)}</p>` : ""}
             </article>`;

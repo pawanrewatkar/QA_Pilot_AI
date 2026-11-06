@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import { ExecutionProgress } from "@/components/external-tests/execution-progress";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { Pagination, readPage } from "@/components/shared/pagination";
+import { Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { ExternalStatusBadge } from "@/components/shared/status-badges";
 import { viewportLabel } from "@/components/test-runs/results-table";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +19,6 @@ import { cn, formatDateTime } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "External test case execution" };
 
-const PAGE_SIZE = 50;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 export default async function ExternalExecutionPage({ params, searchParams }: PageProps<"/external-test-cases/[id]">) {
@@ -30,7 +29,8 @@ export default async function ExternalExecutionPage({ params, searchParams }: Pa
   if (!execution) notFound();
   const status = EXTERNAL_STATUSES.find((s) => s === first(sp.status)) as ExternalStatus | undefined;
   const page = readPage(sp.page);
-  const [{ rows, total }, bugCount] = await Promise.all([db.externalTests.listCases(id, { status, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }), db.bugs.count({ testRunId: id })]);
+  const pageSize = readPageSize(sp.size);
+  const [{ rows, total }, bugCount] = await Promise.all([db.externalTests.listCases(id, { status, limit: pageSize, offset: (page - 1) * pageSize }), db.bugs.count({ testRunId: id })]);
 
   return (
     <div className="space-y-6">
@@ -157,7 +157,7 @@ export default async function ExternalExecutionPage({ params, searchParams }: Pa
           </Table>
         )}
         <div className="border-t p-4">
-          <Pagination basePath={`/external-test-cases/${id}`} params={{ status }} page={page} pageSize={PAGE_SIZE} total={total} />
+          <Pagination basePath={`/external-test-cases/${id}`} params={{ status }} page={page} pageSize={pageSize} total={total} />
         </div>
       </Card>
     </div>

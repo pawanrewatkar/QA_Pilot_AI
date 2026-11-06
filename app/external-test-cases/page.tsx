@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ExecutionWizard } from "@/components/external-tests/execution-wizard";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { Pagination, readPage } from "@/components/shared/pagination";
+import { Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { RunStatusBadge } from "@/components/shared/status-badges";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
 import { currentWorkerLaunchMode } from "@/lib/server/worker-dispatch";
@@ -18,16 +18,15 @@ import { formatDateTime } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "External Test Case Testing" };
 
-const PAGE_SIZE = 10;
-
 export default async function ExternalTestCasesPage({ searchParams }: PageProps<"/external-test-cases">) {
   const sp = await searchParams;
   const page = readPage(sp.page);
+  const pageSize = readPageSize(sp.size);
   const db = await requestDb();
   const env = readEnv();
   const [projects, executions, total, worker] = await Promise.all([
     db.projects.list({ sort: "name" }),
-    db.externalTests.list({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+    db.externalTests.list({ limit: pageSize, offset: (page - 1) * pageSize }),
     db.externalTests.count(),
     db.workers.status(),
   ]);
@@ -96,7 +95,7 @@ export default async function ExternalTestCasesPage({ searchParams }: PageProps<
               </TableBody>
             </Table>
             <div className="border-t p-4">
-              <Pagination basePath="/external-test-cases" params={{}} page={page} pageSize={PAGE_SIZE} total={total} />
+              <Pagination basePath="/external-test-cases" params={{}} page={page} pageSize={pageSize} total={total} />
             </div>
           </>
         )}

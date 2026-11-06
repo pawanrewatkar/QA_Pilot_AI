@@ -73,10 +73,15 @@ export class LocalBugRepository implements BugRepository {
     const { sql, params } = this.where(q);
     // SQLite sorts NULL priorities first; PostgreSQL needs NULLS FIRST for the same order.
     const nulls = this.sql.dialect === "postgres" ? " NULLS FIRST" : "";
+    // Bug codes are numbered per project ("BUG-0001"), so code order groups by project first.
+    const order =
+      q.order === "code"
+        ? "p.name, b.project_id, CAST(SUBSTR(b.code, 5) AS INTEGER), b.rowid"
+        : `CASE b.status WHEN 'OPEN' THEN 0 WHEN 'REOPENED' THEN 0 WHEN 'IN_PROGRESS' THEN 1 ELSE 2 END,
+           CASE b.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END, b.priority${nulls}, b.created_at DESC, b.rowid DESC`;
     const rows = await this.sql.all<Row>(
       `SELECT b.*, p.name AS project_name FROM bugs b JOIN projects p ON p.id = b.project_id ${sql}
-         ORDER BY CASE b.status WHEN 'OPEN' THEN 0 WHEN 'REOPENED' THEN 0 WHEN 'IN_PROGRESS' THEN 1 ELSE 2 END,
-           CASE b.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END, b.priority${nulls}, b.created_at DESC, b.rowid DESC
+         ORDER BY ${order}
          LIMIT ? OFFSET ?`,
       [...params, Math.min(Math.max(q.limit ?? 100, 1), 1000), Math.max(q.offset ?? 0, 0)],
     );

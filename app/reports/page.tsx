@@ -6,7 +6,7 @@ import { AutoRefresh } from "@/components/shared/auto-refresh";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { Pagination, readPage } from "@/components/shared/pagination";
+import { Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { readProjectParam } from "@/components/shared/project-filter";
 import { ReportStatusBadge } from "@/components/shared/status-badges";
 import { Alert } from "@/components/ui/alert";
@@ -21,7 +21,6 @@ import { REPORT_STATUSES, type ReportBundleRecord, type ReportKind, type ReportS
 
 export const metadata: Metadata = { title: "Reports" };
 
-const PAGE_SIZE = 20;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 function FileLink({ bundle, kind, view }: { bundle: ReportBundleRecord; kind: ReportKind; view?: boolean }) {
@@ -52,10 +51,11 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
   const status = REPORT_STATUSES.find((s) => s === first(sp.status)) as ReportStatus | undefined;
   const search = first(sp.q)?.slice(0, 200) || undefined;
   const page = readPage(sp.page);
+  const pageSize = readPageSize(sp.size);
   const db = await requestDb();
   const query = { projectId, status, search };
   const [bundles, total, projects] = await Promise.all([
-    db.reports.listBundles({ ...query, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+    db.reports.listBundles({ ...query, limit: pageSize, offset: (page - 1) * pageSize }),
     db.reports.countBundles(query),
     db.projects.list({ sort: "name" }),
   ]);
@@ -166,7 +166,7 @@ export default async function ReportsPage({ searchParams }: PageProps<"/reports"
             </TableBody>
           </Table>
           <div className="border-t p-4">
-            <Pagination basePath="/reports" params={{ project: projectId, status, q: search }} page={page} pageSize={PAGE_SIZE} total={total} />
+            <Pagination basePath="/reports" params={{ project: projectId, status, q: search }} page={page} pageSize={pageSize} total={total} />
           </div>
         </Card>
       )}

@@ -1,6 +1,7 @@
 import { ExternalLink, ListChecks } from "lucide-react";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
+import { DEFAULT_PAGE_SIZE, Pagination } from "@/components/shared/pagination";
 import { ResultStatusBadge } from "@/components/shared/status-badges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,10 +81,12 @@ export interface DetailViewProps {
   browsers: string[];
   viewports: string[];
   filters: { pageId?: string; browser?: string; viewport?: string; status?: string; extra?: string };
+  page: number;
+  pageSize: number;
 }
 
 /** Server-rendered table over one per-check table, with GET filters (works without JavaScript). */
-export function DetailView({ runId, view, rows, total, pages, browsers, viewports, filters }: DetailViewProps) {
+export function DetailView({ runId, view, rows, total, pages, browsers, viewports, filters, page, pageSize }: DetailViewProps) {
   const filtered = Object.values(filters).some(Boolean);
   return (
     <Card>
@@ -144,8 +147,7 @@ export function DetailView({ runId, view, rows, total, pages, browsers, viewport
       <CardContent className="space-y-3 p-0 pb-4">
         <p className="px-5 text-sm text-muted-foreground">
           {total} row{total === 1 ? "" : "s"}
-          {filtered ? " match the filters" : ""}
-          {total > rows.length ? ` (showing the first ${rows.length})` : ""}.
+          {filtered ? " match the filters" : ""}.
         </p>
         {rows.length === 0 ? (
           <div className="px-5">
@@ -181,6 +183,17 @@ export function DetailView({ runId, view, rows, total, pages, browsers, viewport
             </TableBody>
           </Table>
         )}
+        {total > DEFAULT_PAGE_SIZE ? (
+          <div className="border-t px-4 pt-3">
+            <Pagination
+              basePath={`/test-runs/${runId}`}
+              params={{ view: view.id, page_id: filters.pageId, browser: filters.browser, viewport: filters.viewport, status: filters.status, extra: filters.extra }}
+              page={page}
+              pageSize={pageSize}
+              total={total}
+            />
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

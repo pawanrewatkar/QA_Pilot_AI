@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { DEFAULT_PAGE_SIZE, Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { ProjectFilter, readProjectParam } from "@/components/shared/project-filter";
 import { ResultStatusBadge } from "@/components/shared/status-badges";
 import { moduleLabel } from "@/components/test-runs/results-table";
@@ -27,6 +28,9 @@ export default async function TestCasesPage({ searchParams }: PageProps<"/test-c
     db.projects.list({ sort: "name" }),
     testRunId ? db.testRuns.getDetail(testRunId) : Promise.resolve(null),
   ]);
+  const pageSize = readPageSize(sp.size);
+  const page = Math.min(readPage(sp.page), Math.max(1, Math.ceil(cases.length / pageSize)));
+  const shown = cases.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div className="space-y-6">
@@ -51,7 +55,7 @@ export default async function TestCasesPage({ searchParams }: PageProps<"/test-c
               </TableRow>
             </TableHeader>
             <TableBody>
-              {cases.map((c) => (
+              {shown.map((c) => (
                 <TableRow key={c.id} className="align-top">
                   <TableCell className="font-mono text-xs whitespace-nowrap">
                     {c.testRunId ? <Link href={`/test-runs/${c.testRunId}`} className="hover:underline">{c.code ?? "—"}</Link> : (c.code ?? "—")}
@@ -108,6 +112,11 @@ export default async function TestCasesPage({ searchParams }: PageProps<"/test-c
               ))}
             </TableBody>
           </Table>
+          {cases.length > DEFAULT_PAGE_SIZE ? (
+            <div className="border-t p-3">
+              <Pagination basePath="/test-cases" params={{ project: projectId, run: testRunId }} page={page} pageSize={pageSize} total={cases.length} />
+            </div>
+          ) : null}
         </Card>
       )}
     </div>

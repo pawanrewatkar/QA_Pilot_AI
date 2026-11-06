@@ -58,6 +58,10 @@ describe.skipIf(!browserInstalled("chromium"))("bugs, reports and regression fro
     // The second run saw the same failures: no new bugs, every bug observed twice.
     expect(bugs.every((b) => b.firstSeenRunId === runIds[0])).toBe(true);
     expect(bugs.filter((b) => b.occurrenceCount === 2).length).toBeGreaterThan(0);
+    // Bug-number order starts at BUG-0001 and counts up, whatever the severity.
+    const byCode = (await db.bugs.list({ projectId, order: "code", limit: 1000 })).map((b) => b.code);
+    expect(byCode).toEqual(bugs.map((b) => b.code).sort());
+    expect(byCode[0]).toBe("BUG-0001");
     const withShot = await Promise.all(bugs.map((b) => db.bugs.getDetail(b.id)));
     const screenshots = withShot.flatMap((d) => d!.evidence.filter((e) => e.type === "SCREENSHOT"));
     expect(screenshots.length).toBeGreaterThan(0);

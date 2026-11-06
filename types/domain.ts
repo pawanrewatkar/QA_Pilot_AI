@@ -238,6 +238,8 @@ export interface BugQuery {
   testType?: string;
   browser?: string;
   device?: "desktop" | "mobile" | "tablet";
+  /** "code": in bug-number order (BUG-0001 first). Default: open and most severe first. */
+  order?: "code";
   limit?: number;
   offset?: number;
 }

@@ -29,8 +29,8 @@ async function project(owner: string | null, name: string) {
   if (owner === null) exec("UPDATE projects SET owner_id = NULL WHERE id = ?", id); // legacy row: visible to no owner
   return id;
 }
-function run(projectId: string, id: string) {
-  exec("INSERT INTO test_runs (id, project_id, status) VALUES (?, ?, 'COMPLETED')", id, projectId);
+function run(projectId: string, id: string, createdAt: string) {
+  exec("INSERT INTO test_runs (id, project_id, status, created_at) VALUES (?, ?, 'COMPLETED', ?)", id, projectId, createdAt);
   return id;
 }
 function testCase(id: string, projectId: string, runId: string | null, createdAt: string, code: string | null, extra: Record<string, unknown> = {}) {
@@ -50,7 +50,7 @@ async function seed() {
   const a2 = await project("user-alice", "a2");
   const b = await project("user-bob", "b");
   const legacy = await project(null, "legacy");
-  const [rA1a, rA1b, rA2, rB, rL] = [run(a1, "run-a1a"), run(a1, "run-a1b"), run(a2, "run-a2"), run(b, "run-b"), run(legacy, "run-legacy")];
+  const [rA1a, rA1b, rA2, rB, rL] = [run(a1, "run-a1a", T(1)), run(a1, "run-a1b", T(2)), run(a2, "run-a2", T(3)), run(b, "run-b", T(4)), run(legacy, "run-legacy", T(1))];
   testCase("c1", a1, rA1a, T(2), "TC-002", {
     module: "forms",
     priority: "P1",
@@ -160,9 +160,9 @@ describe("test cases repository: list", () => {
     });
   });
 
-  it("orders newest first, then by code with NULL codes first", async () => {
+  it("orders newest run first, then by test case ID (TC-001 first); cases without a run last", async () => {
     await seed();
-    expect(ids(await base.testCases.list())).toEqual(["c6", "c5", "c3", "c2", "c1", "c4", "c7"]);
+    expect(ids(await base.testCases.list())).toEqual(["c6", "c5", "c3", "c2", "c1", "c7", "c4"]);
   });
 
   it("filters by project, run and owner, with no cross-owner leakage", async () => {

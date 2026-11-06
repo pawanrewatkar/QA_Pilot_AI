@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { DEFAULT_PAGE_SIZE, Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { readProjectParam } from "@/components/shared/project-filter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,9 @@ export default async function PagesPage({ searchParams }: PageProps<"/pages">) {
   const db = await requestDb();
   const [pages, projects] = await Promise.all([db.pages.list({ projectId, pageType, crawlStatus, search, limit: 1000 }), db.projects.list({ sort: "name" })]);
   const filtered = !!(projectId || pageType || crawlStatus || search);
+  const pageSize = readPageSize(sp.size);
+  const page = Math.min(readPage(sp.page), Math.max(1, Math.ceil(pages.length / pageSize)));
+  const shown = pages.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div className="space-y-6">
@@ -83,7 +87,7 @@ export default async function PagesPage({ searchParams }: PageProps<"/pages">) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pages.map((p) => (
+              {shown.map((p) => (
                 <TableRow key={p.id}>
                   <TableCell className="max-w-96">
                     <p className="truncate font-medium">{p.name ?? p.title ?? "—"}</p>
@@ -99,6 +103,11 @@ export default async function PagesPage({ searchParams }: PageProps<"/pages">) {
               ))}
             </TableBody>
           </Table>
+          {pages.length > DEFAULT_PAGE_SIZE ? (
+            <div className="border-t p-3">
+              <Pagination basePath="/pages" params={{ q: search || undefined, project: projectId, type: pageType, status: crawlStatus }} page={page} pageSize={pageSize} total={pages.length} />
+            </div>
+          ) : null}
         </Card>
       )}
     </div>

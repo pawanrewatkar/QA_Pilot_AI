@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { Pagination, readPage } from "@/components/shared/pagination";
+import { Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { readProjectParam } from "@/components/shared/project-filter";
 import { BugStatusBadge, SeverityBadge } from "@/components/shared/status-badges";
 import { moduleLabel, viewportLabel } from "@/components/test-runs/results-table";
@@ -18,7 +18,6 @@ import { BUG_PRIORITIES, BUG_SEVERITIES, BUG_STATUSES, type BugPriority, type Bu
 
 export const metadata: Metadata = { title: "Bugs" };
 
-const PAGE_SIZE = 25;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 const pick = <T extends string>(list: readonly T[], v: string | undefined) => list.find((x) => x === v);
 
@@ -41,8 +40,9 @@ export default async function BugsPage({ searchParams }: PageProps<"/bugs">) {
     device: pick(["desktop", "mobile", "tablet"] as const, first(sp.device)),
   };
   const page = readPage(sp.page);
+  const pageSize = readPageSize(sp.size);
   const [bugs, total, projects, run] = await Promise.all([
-    db.bugs.list({ ...query, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+    db.bugs.list({ ...query, order: "code", limit: pageSize, offset: (page - 1) * pageSize }),
     db.bugs.count(query),
     db.projects.list({ sort: "name" }),
     runId ? db.testRuns.getById(runId) : Promise.resolve(null),
@@ -192,7 +192,7 @@ export default async function BugsPage({ searchParams }: PageProps<"/bugs">) {
             </TableBody>
           </Table>
           <div className="border-t p-4">
-            <Pagination basePath="/bugs" params={params} page={page} pageSize={PAGE_SIZE} total={total} />
+            <Pagination basePath="/bugs" params={params} page={page} pageSize={pageSize} total={total} />
           </div>
         </Card>
       )}

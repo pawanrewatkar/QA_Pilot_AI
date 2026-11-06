@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { createBugsFromRunAction } from "@/app/bugs/actions";
 import { generateReportAction } from "@/app/reports/actions";
 import { EmptyState } from "@/components/shared/empty-state";
+import { DEFAULT_PAGE_SIZE, Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { SubmitButton } from "@/components/shared/submit-button";
 import { PageHeader } from "@/components/shared/page-header";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
@@ -23,7 +24,6 @@ import { BROWSERS, TEST_RESULT_STATUSES, type BrowserName, type TestResultStatus
 
 export const metadata: Metadata = { title: "Test run" };
 
-const PAGE_SIZE = 200;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 export default async function TestRunPage({ params, searchParams }: PageProps<"/test-runs/[id]">) {
@@ -37,10 +37,11 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
   const browser = BROWSERS.find((b) => b === first(sp.browser)) as BrowserName | undefined;
   const viewport = run.viewports.find((v) => v === first(sp.viewport));
   const moduleFilter = first(sp.module);
-  const pageNum = Math.max(1, Number(first(sp.page)) || 1);
+  const pageNum = readPage(sp.page);
+  const pageSize = readPageSize(sp.size);
   const query = { status, browser, viewport, module: moduleFilter || undefined };
   const [results, total, worker, pages] = await Promise.all([
-    db.testResults.listByRun(id, { ...query, limit: PAGE_SIZE, offset: (pageNum - 1) * PAGE_SIZE }),
+    db.testResults.listByRun(id, { ...query, limit: pageSize, offset: (pageNum - 1) * pageSize }),
     db.testResults.countByRun(id, query),
     db.workers.status(),
     db.pages.getByIds(run.projectId, run.pageIds),
@@ -61,23 +62,13 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
     extra: first(sp.extra) || undefined,
   };
   const [detail, ...viewTotals] = await Promise.all([
-    detailView ? db.testResults.listDetails(id, detailView.id, { ...detailFilters, limit: 500 }) : Promise.resolve(null),
+    detailView ? db.testResults.listDetails(id, detailView.id, { ...detailFilters, limit: pageSize, offset: (pageNum - 1) * pageSize }) : Promise.resolve(null),
     ...DETAIL_VIEWS.map((v) => db.testResults.listDetails(id, v.id, { limit: 1 }).then((r) => r.total)),
   ]);
   const tabs = [{ id: "results", label: "Results", total: await db.testResults.countByRun(id) }, ...DETAIL_VIEWS.map((v, i) => ({ id: v.id, label: v.label, total: viewTotals[i] }))];
   const detailViewports = run.modules.includes("responsive") ? VIEWPORTS.map((v) => v.id) : run.viewports;
   const filtered = !!(status || browser || viewport || moduleFilter);
   const modulesWithResults = ["page-load", ...run.modules];
-  const qs = (p: number) => {
-    const s = new URLSearchParams();
-    if (status) s.set("status", status);
-    if (browser) s.set("browser", browser);
-    if (viewport) s.set("viewport", viewport);
-    if (moduleFilter) s.set("module", moduleFilter);
-    s.set("page", String(p));
-    return `?${s.toString()}`;
-  };
-
   return (
     <div className="space-y-6">
       <PageHeader
@@ -178,7 +169,7 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
 
       <DetailTabs runId={run.id} active={detailView?.id ?? "results"} counts={tabs} />
       {detailView && detail ? (
-        <DetailView runId={run.id} view={detailView} rows={detail.rows} total={detail.total} pages={pages.map((p) => ({ id: p.id, url: p.url }))} browsers={run.browsers} viewports={detailViewports} filters={detailFilters} />
+        <DetailView runId={run.id} view={detailView} rows={detail.rows} total={detail.total} pages={pages.map((p) => ({ id: p.id, url: p.url }))} browsers={run.browsers} viewports={detailViewports} filters={detailFilters} page={pageNum} pageSize={pageSize} />
       ) : (
       <Card>
         <CardHeader className="gap-3">
@@ -219,7 +210,7 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
         <CardContent className="space-y-3 p-0 pb-4">
           <p className="px-5 text-sm text-muted-foreground">
             {total} result{total === 1 ? "" : "s"}
-            {filtered ? " match the filters" : ""}. Failures and warnings are listed first; expand a row for steps, verification and evidence.
+            {filtered ? " match the filters" : ""}. Results are listed by test case ID; expand a row for steps, verification and evidence.
           </p>
           {results.length === 0 ? (
             <div className="px-5">
@@ -233,15 +224,9 @@ export default async function TestRunPage({ params, searchParams }: PageProps<"/
           ) : (
             <ResultsTable results={results} />
           )}
-          {total > PAGE_SIZE ? (
-            <div className="flex items-center justify-between px-5 text-sm">
-              <span className="text-muted-foreground">
-                Page {pageNum} of {Math.ceil(total / PAGE_SIZE)}
-              </span>
-              <div className="flex gap-2">
-                {pageNum > 1 ? <Button variant="outline" size="sm" asChild><Link href={qs(pageNum - 1)}>Previous</Link></Button> : null}
-                {pageNum * PAGE_SIZE < total ? <Button variant="outline" size="sm" asChild><Link href={qs(pageNum + 1)}>Next</Link></Button> : null}
-              </div>
+          {total > DEFAULT_PAGE_SIZE ? (
+            <div className="border-t px-4 pt-3">
+              <Pagination basePath={`/test-runs/${id}`} params={{ status, browser, viewport, module: moduleFilter || undefined }} page={pageNum} pageSize={pageSize} total={total} />
             </div>
           ) : null}
         </CardContent>
