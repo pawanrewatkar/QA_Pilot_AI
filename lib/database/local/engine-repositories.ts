@@ -399,8 +399,7 @@ export class LocalTestResultRepository implements TestResultRepository {
       `SELECT tr.*, tc.code, tc.module, tc.section, tc.scenario_type, tc.feature, tc.element, tc.title, tc.preconditions, tc.test_data, tc.expectation_source,
            tc.steps, tc.expected_result
          FROM test_results tr JOIN test_cases tc ON tc.id = tr.test_case_id ${sql}
-         ORDER BY CASE tr.status WHEN 'FAIL' THEN 0 WHEN 'WARNING' THEN 1 WHEN 'PASS' THEN 2 WHEN 'NOT EXECUTED' THEN 3 ELSE 4 END,
-           tc.code ASC${nulls}, tr.browser${nulls}, tr.viewport${nulls} LIMIT ? OFFSET ?`,
+         ORDER BY tc.code ASC${nulls}, tr.browser${nulls}, tr.viewport${nulls} LIMIT ? OFFSET ?`,
       [...params, clampLimit(q.limit, 2000), Math.max(0, q.offset ?? 0)],
     );
     return rows.map((r) => ({
@@ -515,7 +514,8 @@ export class LocalTestCaseRepository implements TestCaseRepository {
            ${summary} AS result_summary
          FROM test_cases tc JOIN projects p ON p.id = tc.project_id
          ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-         ORDER BY tc.created_at DESC, tc.code ASC${postgres ? " NULLS FIRST" : ""} LIMIT ?`,
+         ORDER BY (SELECT r.created_at FROM test_runs r WHERE r.id = tc.test_run_id) DESC${postgres ? " NULLS LAST" : ""}, tc.test_run_id,
+           tc.code ASC${postgres ? " NULLS FIRST" : ""}, tc.created_at DESC LIMIT ?`,
       [...params, clampLimit(options.limit, 5000)],
     );
     return rows.map((row) => ({

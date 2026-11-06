@@ -170,7 +170,7 @@ export async function loadReportData(sql: SqlExecutor, runId: string): Promise<R
 
   // Bugs observed in this run (new or recurring), with the fields of the bug report.
   const bugRepo = new LocalBugRepository(sql);
-  const bugList = await bugRepo.list({ testRunId: runId, limit: 1000 });
+  const bugList = await bugRepo.list({ testRunId: runId, order: "code", limit: 1000 });
   const bugs: ReportBug[] = [];
   const bugsByPage = new Map<string, number>();
   for (const b of bugList) {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { Pagination, readPage } from "@/components/shared/pagination";
+import { Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { BugStatusBadge, ResultStatusBadge, SeverityBadge } from "@/components/shared/status-badges";
 import { moduleLabel, viewportLabel } from "@/components/test-runs/results-table";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -19,7 +19,6 @@ import type { BugRecord } from "@/types";
 
 export const metadata: Metadata = { title: "Compare runs" };
 
-const PAGE_SIZE = 50;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 type Variant = NonNullable<BadgeProps["variant"]>;
 
@@ -126,6 +125,7 @@ export default async function CompareRunsPage({ params, searchParams }: PageProp
   const previousId = options.find((o) => o.id === requested)?.id ?? (await db.history.previousRunId(id));
   const category = REGRESSION_CATEGORIES.find((c) => c === first(sp.category));
   const page = readPage(sp.page);
+  const pageSize = readPageSize(sp.size);
 
   const header = (
     <PageHeader
@@ -151,7 +151,7 @@ export default async function CompareRunsPage({ params, searchParams }: PageProp
   const cmp = await db.history.compare(id, previousId);
   if (!cmp) notFound();
   const rows = category ? cmp.results.filter((r) => r.category === category) : cmp.results.filter((r) => r.category !== "UNCHANGED");
-  const shown = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const shown = rows.slice((page - 1) * pageSize, page * pageSize);
   const changedPerf = cmp.performance.filter((p) => p.overall !== "UNCHANGED");
   const href = (c?: RegressionCategory) => `/test-runs/${id}/compare?with=${previousId}${c ? `&category=${c}` : ""}`;
 
@@ -238,7 +238,7 @@ export default async function CompareRunsPage({ params, searchParams }: PageProp
           </Table>
         )}
         <div className="border-t p-4">
-          <Pagination basePath={`/test-runs/${id}/compare`} params={{ with: previousId, category }} page={page} pageSize={PAGE_SIZE} total={rows.length} />
+          <Pagination basePath={`/test-runs/${id}/compare`} params={{ with: previousId, category }} page={page} pageSize={pageSize} total={rows.length} />
         </div>
       </Card>
 

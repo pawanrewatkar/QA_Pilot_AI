@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { DEFAULT_PAGE_SIZE, Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { DeleteProjectDialog } from "@/components/projects/delete-project-dialog";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +46,9 @@ export default async function ProjectsPage({ searchParams }: PageProps<"/project
   const db = await requestDb();
   const [projects, total] = await Promise.all([db.projects.list({ search: q, filter, sort }), db.projects.count()]);
   const isFiltered = q !== "" || filter !== "all";
+  const pageSize = readPageSize(params.size);
+  const page = Math.min(readPage(params.page), Math.max(1, Math.ceil(projects.length / pageSize)));
+  const shown = projects.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div className="space-y-6">
@@ -136,7 +140,7 @@ export default async function ProjectsPage({ searchParams }: PageProps<"/project
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {projects.map((p) => (
+                  {shown.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell className="max-w-64">
                         <Link href={`/projects/${p.id}`} className="font-medium hover:underline">{p.name}</Link>
@@ -172,6 +176,11 @@ export default async function ProjectsPage({ searchParams }: PageProps<"/project
                   ))}
                 </TableBody>
               </Table>
+              {projects.length > DEFAULT_PAGE_SIZE ? (
+                <div className="border-t p-3">
+                  <Pagination basePath="/projects" params={{ q: q || undefined, filter: filter === "all" ? undefined : filter, sort: sort === "updated" ? undefined : sort }} page={page} pageSize={pageSize} total={projects.length} />
+                </div>
+              ) : null}
             </Card>
           )}
         </>

@@ -334,8 +334,9 @@ describe("reports", () => {
       expect(names).toContain(required);
     }
     const links = wb.getWorksheet("Links")!;
-    expect(links.getRow(1).getCell(11).value).toBe("Status");
-    expect(links.getRow(2).getCell(11).value).toBe("FAIL");
+    expect(links.getRow(1).getCell(10).value).toBe("Status");
+    expect(links.getRow(2).getCell(10).value).toBe("FAIL");
+    expect((links.getRow(1).values as unknown[]).filter(Boolean)).not.toContain("Element");
     expect(links.views[0]).toMatchObject({ state: "frozen", ySplit: 1 });
     expect(links.autoFilter).toBeTruthy();
     expect(String(wb.getWorksheet("Performance")!.getRow(2).getCell(1).value)).toContain("No data recorded");
@@ -351,9 +352,10 @@ describe("reports", () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual(["Bug Report", "Bug Summary", "Testing Type Bug Count"]);
     const sheet = wb.getWorksheet("Bug Report")!;
     const headers = (sheet.getRow(1).values as unknown[]).filter(Boolean);
-    for (const h of ["Bug ID", "Title", "Page Name", "Page URL", "Section", "Test Type", "Scenario Type", "Device", "Browser", "Severity", "Priority", "Status", "Expected Result", "Actual Result", "Steps To Reproduce", "Element", "Selector", "Technical Details", "Screenshot Reference", "Created Date"]) {
+    for (const h of ["Bug ID", "Title", "Page Name", "Page URL", "Section", "Test Type", "Scenario Type", "Device", "Browser", "Severity", "Priority", "Status", "Expected Result", "Actual Result", "Steps To Reproduce", "Technical Details", "Screenshot Reference", "Created Date"]) {
       expect(headers).toContain(h);
     }
+    for (const h of ["Element", "Selector", "Occurrences"]) expect(headers).not.toContain(h);
     expect(sheet.getRow(2).getCell(1).value).toBe("BUG-0001");
     expect(wb.getWorksheet("Testing Type Bug Count")!.getRow(2).getCell(2).value).toBe(1);
   });

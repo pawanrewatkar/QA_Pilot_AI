@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { DEFAULT_PAGE_SIZE, Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { ProjectFilter, readProjectParam } from "@/components/shared/project-filter";
 import { RunStatusBadge } from "@/components/shared/status-badges";
 import { WorkerStatusBanner } from "@/components/shared/worker-status";
@@ -16,10 +17,14 @@ import { formatDateTime } from "@/lib/utils";
 export const metadata: Metadata = { title: "Test Runs" };
 
 export default async function TestRunsPage({ searchParams }: PageProps<"/test-runs">) {
-  const projectId = readProjectParam((await searchParams).project);
+  const sp = await searchParams;
+  const projectId = readProjectParam(sp.project);
   const db = await requestDb();
   const [runs, projects, worker] = await Promise.all([db.testRuns.list({ projectId, limit: 200 }), db.projects.list({ sort: "name" }), db.workers.status()]);
-  const details = await Promise.all(runs.map((r) => db.testRuns.getDetail(r.id)));
+  const pageSize = readPageSize(sp.size);
+  const page = Math.min(readPage(sp.page), Math.max(1, Math.ceil(runs.length / pageSize)));
+  const shown = runs.slice((page - 1) * pageSize, page * pageSize);
+  const details = await Promise.all(shown.map((r) => db.testRuns.getDetail(r.id)));
   const hasActive = runs.some((r) => r.status === "PENDING" || r.status === "RUNNING");
 
   return (
@@ -57,7 +62,7 @@ export default async function TestRunsPage({ searchParams }: PageProps<"/test-ru
               </TableRow>
             </TableHeader>
             <TableBody>
-              {runs.map((r, i) => {
+              {shown.map((r, i) => {
                 const d = details[i]!;
                 return (
                   <TableRow key={r.id}>
@@ -78,6 +83,11 @@ export default async function TestRunsPage({ searchParams }: PageProps<"/test-ru
               })}
             </TableBody>
           </Table>
+          {runs.length > DEFAULT_PAGE_SIZE ? (
+            <div className="border-t p-3">
+              <Pagination basePath="/test-runs" params={{ project: projectId }} page={page} pageSize={pageSize} total={runs.length} />
+            </div>
+          ) : null}
         </Card>
       )}
     </div>

@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { Pagination, readPage } from "@/components/shared/pagination";
+import { DEFAULT_PAGE_SIZE, Pagination, readPage, readPageSize } from "@/components/shared/pagination";
 import { readProjectParam } from "@/components/shared/project-filter";
 import { RunStatusBadge } from "@/components/shared/status-badges";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,6 @@ import { TEST_RUN_STATUSES, type RunHistoryRecord, type TestRunStatus } from "@/
 
 export const metadata: Metadata = { title: "History" };
 
-const PAGE_SIZE = 20;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 const ACTION_VARIANT: Record<string, "success" | "default" | "destructive" | "secondary"> = {
@@ -97,15 +96,18 @@ export default async function HistoryPage({ searchParams }: PageProps<"/history"
   const status = TEST_RUN_STATUSES.find((s) => s === first(sp.status)) as TestRunStatus | undefined;
   const search = first(sp.q)?.slice(0, 200) || undefined;
   const page = readPage(sp.page);
+  const pageSize = readPageSize(sp.size);
   const db = await requestDb();
   const query = { projectId, status, search };
   const [runs, total, entries, projects] = await Promise.all([
-    tab === "runs" ? db.history.listRuns({ ...query, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }) : Promise.resolve([]),
+    tab === "runs" ? db.history.listRuns({ ...query, limit: pageSize, offset: (page - 1) * pageSize }) : Promise.resolve([]),
     tab === "runs" ? db.history.countRuns(query) : Promise.resolve(0),
     tab === "activity" ? db.activity.list({ projectId, limit: 500 }) : Promise.resolve([]),
     db.projects.list({ sort: "name" }),
   ]);
   const filtered = !!(projectId || status || search);
+  const activityPage = Math.min(page, Math.max(1, Math.ceil(entries.length / pageSize)));
+  const shownEntries = entries.slice((activityPage - 1) * pageSize, activityPage * pageSize);
   const tabHref = (t: string) => `/history?tab=${t}${projectId ? `&project=${projectId}` : ""}`;
 
   return (
@@ -181,7 +183,7 @@ export default async function HistoryPage({ searchParams }: PageProps<"/history"
               </TableBody>
             </Table>
             <div className="border-t p-4">
-              <Pagination basePath="/history" params={{ tab: "runs", project: projectId, status, q: search }} page={page} pageSize={PAGE_SIZE} total={total} />
+              <Pagination basePath="/history" params={{ tab: "runs", project: projectId, status, q: search }} page={page} pageSize={pageSize} total={total} />
             </div>
           </Card>
         )
@@ -199,7 +201,7 @@ export default async function HistoryPage({ searchParams }: PageProps<"/history"
               </TableRow>
             </TableHeader>
             <TableBody>
-              {entries.map((a) => (
+              {shownEntries.map((a) => (
                 <TableRow key={a.id}>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(a.createdAt)}</TableCell>
                   <TableCell>
@@ -219,6 +221,11 @@ export default async function HistoryPage({ searchParams }: PageProps<"/history"
               ))}
             </TableBody>
           </Table>
+          {entries.length > DEFAULT_PAGE_SIZE ? (
+            <div className="border-t p-3">
+              <Pagination basePath="/history" params={{ tab: "activity", project: projectId }} page={activityPage} pageSize={pageSize} total={entries.length} />
+            </div>
+          ) : null}
         </Card>
       )}
     </div>
