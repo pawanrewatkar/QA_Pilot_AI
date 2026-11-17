@@ -8,7 +8,7 @@
 > 5. After any significant implementation change (new feature, migration, architecture decision, or a known bug fixed or found), **update this file**: status (§6), decisions (§9) and, if relevant, the schema and commands.
 > 6. Never put credentials, tokens or passwords in this file.
 
-*Last verified against the code: 2026-10-26 (git `5190782 "Add project memory"` on `main`, in sync with `origin/main`, working tree clean). Phase 7 (deployment preparation) is in progress; see §10.*
+*Last verified against the code: 2026-11-17 (`main` at `4beddac`, merge of PR #5). The app is deployed to production; see §12 for the current status. Sections 6–11 describe earlier phases and are kept for history.*
 
 ---
 
@@ -523,3 +523,61 @@ Branch `feat/supabase-auth`. Step 1 is committed in `efb5d55` (on `origin/main`)
   - Next.js was upgraded to 16.4.3 on 2026-10-27; this fixes GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr and GHSA-p3m5-59mp-jv5r. The remaining npm audit items are transitive or older dependencies: zod, vite, chromium-bidi, puppeteer-core, fast-uri, and exceljs/uuid (fixing that one needs a major version change).
   - Supabase dashboard settings: site URL, redirect URLs, email templates using `/auth/confirm?token_hash=…`, confirm-email on, disable public sign-ups or add a before-user-created hook, and decide on SMTP.
   - Hosted database and storage (data is still local SQLite).
+
+---
+
+## 12. Production status and changes (2026-10-28 → 2026-11-17)
+
+*Verified against `main` at `4beddac` (merge of PR #5) on 2026-11-17. No credentials, keys, connection strings or private email addresses belong in this section; the repository is public.*
+
+### 12.1 Where it runs
+
+| Part | Where | Notes |
+|---|---|---|
+| Web app | Vercel (Hobby), production URL `https://qa-pilot-ai-seven.vercel.app` | Deploys automatically when `main` changes. Function region **`hnd1` (Tokyo)**, next to the database (was `iad1`; signed-in pages took 1.2–3 s). |
+| Database | Supabase PostgreSQL, region `ap-northeast-1` (Tokyo) | Session pooler, verified TLS required (`DATABASE_SSL_CA`, `postgresConfig` refuses unverified TLS for non-loopback hosts). Migration `0001_initial_schema` applied 2026-11-03 (35 tables, RLS on, no policies; access only through the owner-scoped server code). Free plan: **no backups**; `lib/database/postgres/rollbacks/0001_initial_schema.down.sql` is only safe while tables are empty. |
+| File storage | Supabase Storage, private bucket `qa-pilot-artifacts` | Screenshots, documents and reports; downloads go through the app, which checks ownership (401 when signed out). |
+| Background worker | GitHub Actions, workflow `.github/workflows/qa-worker.yml`, environment `qa-worker` | Started automatically by the app when work is queued (`lib/worker/dispatch.ts`, `workflow_dispatch`, needs `GITHUB_WORKER_TOKEN` + `GITHUB_WORKER_REPOSITORY` on Vercel — set), plus an hourly safety run (`23 * * * *`). GitHub runs schedules best-effort (2 of ~16 slots fired in one test). |
+| CI | `.github/workflows/ci.yml` on pull requests to `main` | Lint, typecheck, unit/integration tests, build, e2e. `main` is protected. |
+
+### 12.2 Pull requests merged
+
+1. **#1** Supabase auth, PostgreSQL support, CI.
+2. **#2** Final initial schema migration + rollback script + tests.
+3. **#3** Automatic worker start (`lib/worker/dispatch.ts`, `lib/server/worker-dispatch.ts`, `after()` in the four enqueue actions); worker banner/Settings show the right hint per launch mode (github-auto / github-manual / local).
+4. **#4** Settings: environment-variable chips wrap (no horizontal scroll). Sign-in / register / update-password forms: show/hide password (eye) button (`components/auth/auth-form.tsx`; only the visibility flag is kept in state).
+5. **#5**
+   - Reports: Element, Selector and Occurrences columns removed from the Bug Excel; Element removed from the Testing Excel result sheets; element/selector/"seen N times" removed from HTML/PDF. Measurement sheets (UI Measurements, Accessibility, Typography) still have an "Element" column on purpose.
+   - Ordering: Bugs page and reports list bugs in bug-number order (`BugQuery.order = "code"`; the dashboard keeps open/most-severe first). Test Cases: newest run first, then `TC-0001` upward. Run results: by test case ID (no longer failures first).
+   - Pagination: shared `components/shared/pagination.tsx` — 10 rows by default, per-page choice 10 / 20 / 50 (`size` query parameter), on Test Cases, Bugs, Test Runs, run results and detail tabs, Projects, History (runs + activity), Reports, External test cases, Compare and `/pages`. **Not** on Projects → Pages & crawl (a selection checklist; paging would drop selections).
+   - Sidebar: "Pages" entry removed; the `/pages` route still exists.
+
+### 12.3 Numbering (current behaviour)
+
+- Test case IDs (`TC-0001`) are numbered **per test run** in creation order (`lib/database/local/engine-store.ts`). The same number can mean different checks in different runs; the stable identity is `case_key` (page + check).
+- Bug IDs (`BUG-0001`) are numbered **per project** (highest + 1, `lib/bugs/engine.ts`).
+- External test cases keep the IDs from the uploaded workbook.
+
+### 12.4 Accounts and sign-in
+
+- Sign-in requires: correct password, **confirmed** email, and the email on the **`AUTH_ALLOWED_EMAILS`** allow-list (Vercel, Secret type — write-only; saving replaces the whole comma-separated list; entries can be `@domain`). Redeploy after changing it.
+- Not allow-listed → sign-in shows the generic "email or password is incorrect"; registration shows the normal success message but never calls Supabase, so no email is sent. This is deliberate (no account enumeration).
+- Supabase's built-in email service delivers only to members of the Supabase team and is rate-limited. For other people: create the user in Supabase with **Auto Confirm User**, or configure custom SMTP (Authentication → Emails → SMTP Settings).
+- Supabase Auth site URL is the production URL; redirect `/auth/confirm**`.
+
+### 12.5 Production QA audit (2026-11-05 / 06, testing only)
+
+Signed-out, signed-in and functional passes against production (reports kept outside the repository). End-to-end verified: project → crawl → test run (6/6 units, 473 verdicts) → bugs → PDF/HTML/Excel reports; private storage access checks; auth flows, cookies, redirects; 0 axe violations; Lighthouse 91–100. No Critical/High defects.
+
+Fixed since: hosted worker hint (PR #3), branch protection, function region (`hnd1`), Settings chip overflow (PR #4), automatic worker start configured.
+
+Still open (Medium/Low): very large reports (HTML ≈29 MB / PDF ≈17 MB for 6 units — larger runs may exceed the 50 MB storage object limit); worker installs system packages before checking for work (an empty run took ~43 min); "Sign out" shown to signed-out visitors; signed-out pages prefetch protected links; no Content-Security-Policy header; brief loading skeleton on `/login`; malformed email gets the generic sign-in message.
+
+Not yet tested live: external test case execution, reference-document upload/download, cross-account isolation with a second account (covered by CI), registration/confirmation/reset emails, Firefox/WebKit runs on a real target.
+
+### 12.6 Working notes for future sessions
+
+- Running `npx …` or `next dev` locally can rewrite `package-lock.json` (breaks CI with `npm ci`) and `AGENTS.md`; restore both before committing.
+- Local full-suite runs can time out in the real-browser engine tests when the desktop is busy; they pass alone and in CI.
+- Vercel: `NEXT_PUBLIC_*` variables must be type **Config**, not Secret.
+- Do not print `project-memory/Deployment.md` (git-ignored, contains connection details).
