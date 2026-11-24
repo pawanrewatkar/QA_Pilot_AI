@@ -24,11 +24,14 @@ export function scoreHeader(header: string, field: CaseField): number {
   const list = SYNONYMS[field];
   const exact = list.indexOf(h);
   if (exact >= 0) return 100 - exact;
-  // Longer synonyms contained as whole words (e.g. "Expected Result (UI)") score lower than exact ones.
+  // Synonyms contained as whole words (e.g. "Expected Result (UI)") score lower than exact ones. The longest contained
+  // synonym decides, so a header naming two fields goes to the more specific one: "Test Case Steps to Reproduce" is
+  // Test Steps ("steps to reproduce"), not Test Case ("test case").
+  let best = 0;
   for (const [i, syn] of list.entries()) {
-    if (syn.length >= 4 && new RegExp(`\\b${syn.replace(/ /g, "\\s")}\\b`).test(h)) return 50 - i;
+    if (syn.length >= 4 && new RegExp(`\\b${syn.replace(/ /g, "\\s")}\\b`).test(h)) best = Math.max(best, 40 + Math.min(syn.length, 40) - i / 100);
   }
-  return 0;
+  return best;
 }
 
 /** Proposes a mapping: each field gets its best-scoring column, and each column is used at most once. */

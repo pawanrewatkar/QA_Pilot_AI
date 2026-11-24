@@ -19,7 +19,8 @@ export type Action =
   | { kind: "search"; term: string; raw: string }
   | { kind: "select"; option: string; field: string | null; raw: string }
   | { kind: "hover"; text: string; raw: string }
-  | { kind: "scroll"; to: "bottom" | "top" | string; raw: string }
+  | { kind: "scroll"; to: "bottom" | "top" | "through" | string; raw: string }
+  | { kind: "back"; raw: string }
   | { kind: "check" | "uncheck"; text: string; raw: string }
   | { kind: "press"; key: string; raw: string }
   | { kind: "submit"; raw: string }
@@ -49,12 +50,18 @@ export interface Interpretation {
   human: string | null;
   /** Set when a step cannot be performed reliably or safely. */
   notExecuted: string | null;
+  /**
+   * Steps that only observe something the engine cannot measure (e.g. "Check X in both footers"). They change nothing
+   * on the page, so the case still runs; a person has to check them, so the case is never reported as PASS.
+   */
+  manual: string[];
   /** Steps were derived from the test case because the sheet had none. */
   inferred: boolean;
   /** Device kinds the case explicitly targets (empty = any). */
   devices: ViewportKind[];
 }
 
+const UNMEASURABLE_VERIFICATION = "the verification could not be turned into a measurable check";
 const lower = (s: string) => s.toLowerCase();
 const clean = (s: string) => s.replace(/\s+/g, " ").trim();
 
@@ -128,6 +135,9 @@ function fieldValue(text: string, field: string): FillValue | null {
 export function parseStep(step: string, website: string): Action | { unsupported: string } | null {
   const raw = clean(step);
   const s = lower(raw).replace(/[.!]+$/, "");
+  // Same text as `s` but with its original case: phrases matched on `s` are cut from the end of this (not of `raw`,
+  // whose trailing full stop would shift every cut by one character, e.g. "Click the logo." -> "he logo").
+  const body = raw.replace(/[.!]+$/, "");
   const q = quoted(raw);
 
   if (/\bupload\b/.test(s)) return { unsupported: "file uploads are not performed automatically" };
@@ -135,16 +145,16 @@ export function parseStep(step: string, website: string): Action | { unsupported
 
   const verify = /^(verify|check|ensure|confirm|validate|assert|observe|see|make sure|expect|the user should|user should|it should)\b(\s+(that|if|whether))?\s*(.*)$/.exec(s);
   if (verify && !/\b(checkbox|check ?box|tick ?box)\b/.test(s)) {
-    const checks = planChecks(raw.slice(raw.length - verify[4].length) || raw);
-    return checks.length ? { kind: "verify", checks, raw } : { unsupported: "the verification could not be turned into a measurable check" };
+    const checks = planChecks(body.slice(body.length - verify[4].length) || raw);
+    return checks.length ? { kind: "verify", checks, raw } : { unsupported: UNMEASURABLE_VERIFICATION };
   }
 
   const nav = /^(open|go to|navigate to|visit|launch|browse to|load|access|land on)\b\s*(.*)$/.exec(s);
   if (nav) {
-    const rest = raw.slice(raw.length - nav[2].length);
+    const rest = body.slice(body.length - nav[2].length);
     const url = /(https?:\/\/[^\s"'”)]+)/.exec(rest)?.[1] ?? /(?:^|\s)(\/[\w\-./?=&%]*)/.exec(rest)?.[1];
     if (url) return { kind: "navigate", target: { type: "url", url: new URL(url, website).href }, raw };
-    if (/^(the\s+)?(home ?page|home|website|web ?site|site|application|app|landing page|main page|url|base url|browser|application url|website url)\b/.test(nav[2]) || !nav[2]) return { kind: "navigate", target: { type: "home" }, raw };
+    if (/^(the\s+|a\s+|an\s+|your\s+)?(home ?page|home|website|web ?site|site|application|app|landing page|main page|url|base url|(web\s+)?browser|application url|website url)\b/.test(nav[2]) || !nav[2]) return { kind: "navigate", target: { type: "home" }, raw };
     const page = /^(the\s+)?(.+?)\s+(page|screen|section)\b/.exec(nav[2]);
     if (page) return { kind: "navigate", target: { type: "page", name: q[0] ?? target(page[2]) }, raw };
     return { unsupported: `the page to open could not be identified ("${raw}")` };
@@ -187,19 +197,22 @@ export function parseStep(step: string, website: string): Action | { unsupported
 
   if (/^(submit|send)\b/.test(s) && !q.length) return { kind: "submit", raw };
   const hover = /^(hover|mouse over|move (the )?mouse (over|to|on))\s*(over|on|to)?\s*(.+)$/.exec(s);
-  if (hover) return { kind: "hover", text: q[0] ?? target(raw.slice(raw.length - hover[5].length)), raw };
-  const scroll = /^scroll\b\s*(down|up)?\s*(to\s+(the\s+)?(.+))?$/.exec(s);
+  if (hover) return { kind: "hover", text: q[0] ?? target(body.slice(body.length - hover[5].length)), raw };
+  if (/^scroll\s+(down\s+)?(through|across|along)\s+(the\s+)?((whole|entire|full|complete)\s+)?(page|website|web ?site|site|home ?page)\b/.test(s)) return { kind: "scroll", to: "through", raw };
+  const scroll = /^scroll\b\s*(back\s+)?(down|up)?\s*(back\s+)?(to\s+(the\s+)?(.+))?$/.exec(s);
   if (scroll) {
-    const to = scroll[4] ? target(scroll[4]) : scroll[1] === "up" ? "top" : "bottom";
-    return { kind: "scroll", to: /^(bottom|end|footer)$/.test(to) ? "bottom" : /^(top|header)$/.test(to) ? "top" : to, raw };
+    // A quoted name ("Scroll to the “Reclaim Your Life Today” form") is the element to find, without the trailing words.
+    const to = q[0] ?? (scroll[6] ? target(scroll[6]) : scroll[2] === "up" || scroll[1] || scroll[3] ? "top" : "bottom");
+    return { kind: "scroll", to: /^(bottom|end|footer)$/i.test(to) ? "bottom" : /^(top|header)$/i.test(to) ? "top" : to, raw };
   }
   const tick = /^(check|tick|uncheck|untick|enable|disable)\s+(the\s+)?(.+?)(\s+(checkbox|check ?box|box|toggle))?$/.exec(s);
   if (tick && /\b(checkbox|check ?box|box|toggle|agree|terms|consent|remember)\b/.test(s)) {
-    return { kind: /^(uncheck|untick|disable)/.test(tick[1]) ? "uncheck" : "check", text: q[0] ?? target(raw.slice(raw.length - (tick[3] + (tick[4] ?? "")).length)), raw };
+    return { kind: /^(uncheck|untick|disable)/.test(tick[1]) ? "uncheck" : "check", text: q[0] ?? target(body.slice(body.length - (tick[3] + (tick[4] ?? "")).length)), raw };
   }
+  if (/^(go|navigate|move)\s+back\b|^return\s+(back\s+)?to\s+(the\s+)?previous\s+page\b|^(use|click|press|tap|hit)\s+(on\s+)?(the\s+)?(browser'?s?\s+)?back(\s+button|\s+arrow)?\b/.test(s)) return { kind: "back", raw };
   const click = /^(click|tap|press|hit|select|choose|double[- ]click)\s+(on\s+)?(.+)$/.exec(s);
   if (click) {
-    const text = q[0] ?? target(raw.slice(raw.length - click[3].length));
+    const text = q[0] ?? target(body.slice(body.length - click[3].length));
     if (!text) return { unsupported: "the element to click could not be identified" };
     if (/^(submit|send)$/i.test(text)) return { kind: "submit", raw };
     return { kind: "click", text, raw };
@@ -299,11 +312,24 @@ function infer(c: ExternalCase, checks: Check[]): Action[] {
   return [];
 }
 
+const OBSERVE_VERB = /\b(check|verify|confirm|ensure|compare|observe|validate|inspect|review)\b/i;
+const ACTION_VERB = /\b(click|tap|press|submit|send|enter|type|fill|select|choose|upload|delete|remove|add|buy|pay|log ?in|sign ?in|register|book|order)\b/i;
+
+/**
+ * "manual" for a step that only observes something the engine cannot measure (a person checks it; the case still
+ * runs), null otherwise (the step stops the case as before). A step that also acts on the page is never skipped.
+ */
+function observationStep(step: string, parsed: ReturnType<typeof parseStep>): "manual" | null {
+  if (parsed && "unsupported" in parsed) return parsed.unsupported === UNMEASURABLE_VERIFICATION ? "manual" : null;
+  return OBSERVE_VERB.test(step) && !ACTION_VERB.test(step) ? "manual" : null;
+}
+
 export function interpretCase(c: ExternalCase, website: string): Interpretation {
   const devices = targetDevices(c);
   const human = detectHumanInteraction(c);
   const checks = c.expected ? planChecks(c.expected) : [];
-  const base = { checks, human, devices };
+  const manual: string[] = [];
+  const base = { checks, human, devices, manual };
   if (human) return { ...base, actions: [], notExecuted: null, inferred: false };
 
   const steps = c.steps ? splitSteps(c.steps) : [];
@@ -311,8 +337,16 @@ export function interpretCase(c: ExternalCase, website: string): Interpretation 
   if (c.url) actions.push({ kind: "navigate", target: { type: "url", url: new URL(c.url, website).href }, raw: `Open ${c.url}` });
   for (const step of steps) {
     const parsed = parseStep(step, website);
-    if (!parsed) return { ...base, actions, notExecuted: `Step "${step}" could not be interpreted as a browser action, so the test case was not executed.`, inferred: false };
-    if ("unsupported" in parsed) return { ...base, actions, notExecuted: `Step "${step}" was not performed: ${parsed.unsupported}.`, inferred: false };
+    if (!parsed || "unsupported" in parsed) {
+      // A step that only looks at something changes nothing on the page: run what can be measured and leave the rest
+      // to a person. A step that would act on the page and is not understood still stops the case.
+      if (observationStep(step, parsed) === "manual") {
+        manual.push(step);
+        continue;
+      }
+      if (!parsed) return { ...base, actions, notExecuted: `Step "${step}" could not be interpreted as a browser action, so the test case was not executed.`, inferred: false };
+      return { ...base, actions, notExecuted: `Step "${step}" was not performed: ${parsed.unsupported}.`, inferred: false };
+    }
     actions.push(parsed);
   }
   const allChecks = [...checks, ...actions.flatMap((a) => (a.kind === "verify" ? a.checks : []))];
@@ -357,6 +391,8 @@ export function describeAction(a: Action): string {
       return "Submit the form";
     case "addToCart":
       return "Add the product to the cart";
+    case "back":
+      return "Go back to the previous page";
     case "wait":
       return "Wait";
     case "verify":

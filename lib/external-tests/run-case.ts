@@ -349,7 +349,27 @@ async function perform(r: Run, a: Action) {
       r.performed.push(`Hovered over “${a.text}”.`);
       return;
     }
+    case "back": {
+      const before = p.url();
+      await p.goBack({ timeout: 15_000 }).catch(() => null);
+      await settle(p);
+      if (p.url() === before) throw new StepError("There was no previous page to go back to.");
+      r.performed.push(`Went back to ${p.url()}.`);
+      return;
+    }
     case "scroll": {
+      if (a.to === "through") {
+        // Step down the page so lazy-loaded content appears, then return to the top.
+        for (let i = 0; i < 40; i++) {
+          const atEnd = await p.evaluate("(() => { window.scrollBy(0, window.innerHeight * 0.8); return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2; })()");
+          await p.waitForTimeout(150);
+          if (atEnd) break;
+        }
+        await p.evaluate("window.scrollTo(0, 0)");
+        await p.waitForTimeout(300);
+        r.performed.push("Scrolled through the whole page.");
+        return;
+      }
       if (a.to === "bottom" || a.to === "top") {
         await p.evaluate(a.to === "bottom" ? "window.scrollTo(0, document.body.scrollHeight)" : "window.scrollTo(0, 0)");
       } else {
@@ -457,10 +477,13 @@ export async function runExternalCase(ctx: PageTestContext, c: ExternalCase, int
     const verdict = judge(allChecks, obs);
     const shot = await ctx.capture(`${c.caseRef ?? `Row ${c.rowNumber}`} result`);
     if (shot) shots.push(shot);
-    const story = [...r.performed, ...r.log, ...verdict.details].join(" ");
+    // Observation-only steps the engine cannot measure: listed for a person, and the case is never reported as PASS.
+    const manualNote = interp.manual.length ? `Not checked automatically (a person must check): ${interp.manual.map((m) => `“${m.replace(/[.]+$/, "")}”`).join("; ")}.` : "";
+    const story = [...r.performed, ...r.log, ...verdict.details, manualNote].filter(Boolean).join(" ");
     const ev = [evidence.note("Observed", `URL: ${obs.after.url}\nTitle: ${obs.after.title}\n${verdict.details.join("\n")}`), ...shots];
     switch (verdict.outcome) {
       case "PASS":
+        if (interp.manual.length) return done("HUMAN INTERACTION", `${HUMAN_INTERACTION_TEXT} The automated checks passed. ${story}`, { verifications: verdict.details, evidence: ev });
         return done("PASS", story, { verifications: verdict.details, evidence: ev });
       case "FAIL":
         return done("FAIL", story, { evidence: ev });

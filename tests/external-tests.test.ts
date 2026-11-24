@@ -90,6 +90,13 @@ describe("workbook parsing and column mapping", () => {
     expect(validateMapping({ title: 2, expected: 2 }, cols(["ID", "Name"])).errors.join(" ")).toMatch(/same column/);
   });
 
+  it("maps a header naming two fields to the more specific one", () => {
+    const cols = (names: string[]) => names.map((header, i) => ({ index: i + 1, header }));
+    // "Test Case Steps to Reproduce" contains "test case" but is the steps column.
+    expect(detectMapping(cols(["Test Case ID", "Test Description", "Test Case Steps to Reproduce", "Expected Result", "Actual Result"]))).toEqual({ caseId: 1, title: 2, steps: 3, expected: 4 });
+    expect(detectMapping(cols(["Test Scenario Description", "Steps", "Expected Result"]))).toEqual({ scenario: 1, steps: 2, expected: 3 });
+  });
+
   it("turns mapped rows into test cases and skips rows without a test case", async () => {
     const wb = await loadWorkbook(await workbook({ S: [HEADERS, ["TC01", "Open home", "Open homepage", "Page loads"], ["TC02", "", "Click", "x"]] }));
     const sheet = readSheet(wb, "S");
@@ -244,6 +251,38 @@ describe("expected-result evaluation", () => {
     expect(interpretCase(c("Do the magic dance", "Something happens"), "https://site.test/").notExecuted).toMatch(/could not be interpreted/);
     expect(interpretCase(c(null, "Products should be sorted from low to high price."), "https://site.test/")).toMatchObject({ inferred: true, actions: [{ kind: "select" }] });
     expect(interpretCase(c(null, "User should be redirected to the dashboard"), "https://site.test/")).toMatchObject({ inferred: true, actions: [{ kind: "click", text: "dashboard" }] });
+  });
+
+  it("understands everyday steps: open a browser, back, scrolling and quoted section names", () => {
+    const W = "https://site.test/";
+    const c = (steps: string) => ({ rowNumber: 2, caseRef: "TC", title: "Case", steps, expected: "The About page opens", url: null, testData: null, preconditions: null });
+    const plan = interpretCase(
+      c(['Open a browser (Chrome).', "Go to https://site.test/", "Click the About link.", "Use browser Back to return.", "Go back after each click.", "Scroll back to the top.", "Scroll through the whole page.", 'Scroll to the "Reclaim Your Life Today" form.', "Hover over Services."].map((s, i) => `${i + 1}. ${s}`).join("\n")),
+      W,
+    );
+    expect(plan.notExecuted).toBeNull();
+    expect(plan.actions).toMatchObject([
+      { kind: "navigate", target: { type: "home" } },
+      { kind: "navigate", target: { type: "url", url: W } },
+      { kind: "click", text: "About" }, // no first letter lost to the trailing full stop
+      { kind: "back" },
+      { kind: "back" },
+      { kind: "scroll", to: "top" },
+      { kind: "scroll", to: "through" },
+      { kind: "scroll", to: "Reclaim Your Life Today" },
+      { kind: "hover", text: "Services" },
+    ]);
+  });
+
+  it("leaves unmeasurable observation steps to a person but still stops on unknown actions", () => {
+    const W = "https://site.test/";
+    const c = (steps: string) => ({ rowNumber: 2, caseRef: "TC", title: "Case", steps, expected: "The About page opens", url: null, testData: null, preconditions: null });
+    const observed = interpretCase(c('1. Open the homepage.\n2. Check the browser tab title.\n3. View page source and check the meta description.\n4. Click About.'), W);
+    expect(observed).toMatchObject({ notExecuted: null, manual: ["Check the browser tab title.", "View page source and check the meta description."] });
+    expect(observed.actions.map((a) => a.kind)).toEqual(["navigate", "click"]);
+    // An unknown step that would act on the page (or mixes acting with checking) still stops the case.
+    expect(interpretCase(c("1. Open the homepage.\n2. Frobnicate the widget."), W).notExecuted).toMatch(/could not be interpreted/);
+    expect(interpretCase(c("1. Open the homepage.\n2. Frobnicate the widget and click Save, then check it."), W).notExecuted).toMatch(/could not be interpreted|not performed/);
   });
 
   it("aggregates browser/device results worst-first", () => {
